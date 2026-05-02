@@ -1,0 +1,99 @@
+:root {
+  color-scheme: dark;
+  font-family: 'Segoe UI', system-ui, -apple-system, Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; color: #f5f0e3; }
+
+#app {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(ellipse at center, #1a0e22 0%, #000 70%);
+}
+
+/* YouTube background sits inside the same 16:9 letterbox as the canvas,
+   one layer below it, so canvas drawing covers it pixel-for-pixel. */
+#yt-bg {
+  position: absolute;
+  width: min(100vw, calc(100vh * 16 / 9));
+  height: min(100vh, calc(100vw * 9 / 16));
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: #000;
+  display: none;
+}
+
+#yt-bg.bh-yt-active { display: block; }
+
+#yt-bg iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  pointer-events: none;
+  /* Slightly dim the video so highway + notes stay legible. */
+  filter: brightness(0.5) saturate(1.05);
+}
+
+/* Soft black gradient bands at the very top and bottom of the YouTube
+   iframe to mute its persistent chrome (avatar + tiny title at top,
+   YouTube watermark + "Up next" link at bottom). The bands feather into
+   the video so there's no hard line. Our HUD song title and progress bar
+   sit visually on top of these bands and provide the primary framing. */
+#yt-bg::before,
+#yt-bg::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+#yt-bg::before {
+  top: 0;
+  height: 100px;
+  background: linear-gradient(
+    to bottom,
+    #000 0,
+    #000 50px,
+    rgba(0, 0, 0, 0) 100px
+  );
+}
+
+#yt-bg::after {
+  bottom: 0;
+  height: 110px;
+  background: linear-gradient(
+    to top,
+    #000 0,
+    #000 60px,
+    rgba(0, 0, 0, 0) 110px
+  );
+}
+
+#game {
+  position: relative;
+  z-index: 1;
+  width: min(100vw, calc(100vh * 16 / 9));
+  height: min(100vh, calc(100vw * 9 / 16));
+  outline: none;
+  display: block;
+}
+
+#overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+
+#overlay > * { pointer-events: auto; }

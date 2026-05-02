@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+.cache/
+.parcel-cache/
+*.log
+.DS_Store
+.env
+.env.local
+.vscode/
+.idea/
+*.tsbuildinfo
+
+# Generated song data
+data/songs/*/
+!data/songs/.gitkeep

@@ -1,0 +1,30 @@
+{
+  "name": "bongos-hero",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A 2-lane keyboard rhythm game inspired by PS2-era Guitar Hero, with YouTube auto-charting.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm-run-all --parallel dev:server dev:web",
+    "dev:web": "npm --workspace @bongos-hero/web run dev",
+    "dev:server": "npm --workspace @bongos-hero/server run dev",
+    "build": "npm-run-all --serial build:shared build:server build:web",
+    "build:shared": "npm --workspace @bongos-hero/shared run build",
+    "build:server": "npm --workspace @bongos-hero/server run build",
+    "build:web": "npm --workspace @bongos-hero/web run build",
+    "typecheck": "npm-run-all --serial typecheck:shared typecheck:server typecheck:web",
+    "typecheck:shared": "npm --workspace @bongos-hero/shared run typecheck",
+    "typecheck:server": "npm --workspace @bongos-hero/server run typecheck",
+    "typecheck:web": "npm --workspace @bongos-hero/web run typecheck"
+  },
+  "devDependencies": {
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
