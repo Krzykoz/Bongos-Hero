@@ -86,10 +86,7 @@ function lightenHex(hex: string, factor: number): string {
  * (faster on most browsers and worker-friendly), otherwise falls back to a
  * detached `<canvas>` element.
  */
-function buildSprite(
-  paint: (ctx: AnyCtx2D) => void,
-  size: number,
-): NoteSprite {
+function buildSprite(paint: (ctx: AnyCtx2D) => void, size: number): NoteSprite {
   if ('OffscreenCanvas' in globalThis) {
     const canvas = new OffscreenCanvas(size, size);
     const ctx = canvas.getContext('2d');

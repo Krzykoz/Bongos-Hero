@@ -30,9 +30,11 @@ export interface SfxBank {
   durations: Record<SfxId, number>;
 }
 
-interface OfflineAudioContextCtor {
-  new (numChannels: number, length: number, sampleRate: number): OfflineAudioContext;
-}
+type OfflineAudioContextCtor = new (
+  numChannels: number,
+  length: number,
+  sampleRate: number,
+) => OfflineAudioContext;
 
 interface WebkitWindow {
   OfflineAudioContext?: OfflineAudioContextCtor;
@@ -51,12 +53,20 @@ const SAMPLE_SPECS: readonly SampleSpec[] = [
   {
     id: 'hit-perfect',
     durationMs: 120,
-    render: (buf, sr) => renderHitTok(buf, sr, { ping: 1200, pingMs: 60, decayMs: 80, noiseGain: 0.6, pingGain: 0.55 }),
+    render: (buf, sr) =>
+      renderHitTok(buf, sr, {
+        ping: 1200,
+        pingMs: 60,
+        decayMs: 80,
+        noiseGain: 0.6,
+        pingGain: 0.55,
+      }),
   },
   {
     id: 'hit-great',
     durationMs: 110,
-    render: (buf, sr) => renderHitTok(buf, sr, { ping: 900, pingMs: 45, decayMs: 70, noiseGain: 0.55, pingGain: 0.4 }),
+    render: (buf, sr) =>
+      renderHitTok(buf, sr, { ping: 900, pingMs: 45, decayMs: 70, noiseGain: 0.55, pingGain: 0.4 }),
   },
   {
     id: 'hit-good',
@@ -159,9 +169,10 @@ function renderHitTok(buf: Float32Array, sr: number, p: HitTokParams): void {
   for (let i = 0; i < buf.length; i++) {
     let s = 0;
     if (i < noiseEnd) {
-      const env = i < attackSamples
-        ? i / Math.max(1, attackSamples)
-        : Math.exp(-(i - attackSamples) / Math.max(1, decaySamples * 0.4));
+      const env =
+        i < attackSamples
+          ? i / Math.max(1, attackSamples)
+          : Math.exp(-(i - attackSamples) / Math.max(1, decaySamples * 0.4));
       s += (rng() * 2 - 1) * env * p.noiseGain;
     }
     if (i < pingSamples) {
@@ -184,9 +195,10 @@ function renderHitThump(buf: Float32Array, sr: number): void {
   for (let i = 0; i < buf.length; i++) {
     const noise = rng() * 2 - 1;
     prev = prev + a * (noise - prev);
-    const env = i < attackSamples
-      ? i / Math.max(1, attackSamples)
-      : Math.exp(-(i - attackSamples) / Math.max(1, decaySamples * 0.5));
+    const env =
+      i < attackSamples
+        ? i / Math.max(1, attackSamples)
+        : Math.exp(-(i - attackSamples) / Math.max(1, decaySamples * 0.5));
     buf[i] = clipSoft(prev * env * 0.8);
   }
 }
@@ -216,7 +228,7 @@ function renderMiss(buf: Float32Array, sr: number): void {
 }
 
 function renderChime(buf: Float32Array, sr: number): void {
-  const partials: ReadonlyArray<{ f: number; g: number }> = [
+  const partials: readonly { f: number; g: number }[] = [
     { f: 660, g: 0.5 },
     { f: 990, g: 0.35 },
     { f: 1320, g: 0.22 },
@@ -302,13 +314,13 @@ export function bufferToWavBlob(buffer: AudioBuffer): Blob {
 
   // fmt chunk.
   writeAscii(view, 12, 'fmt ');
-  view.setUint32(16, 16, true);             // PCM chunk size
-  view.setUint16(20, 1, true);              // format = PCM
+  view.setUint32(16, 16, true); // PCM chunk size
+  view.setUint16(20, 1, true); // format = PCM
   view.setUint16(22, numChannels, true);
   view.setUint32(24, sampleRate, true);
   view.setUint32(28, sampleRate * numChannels * bytesPerSample, true); // byte rate
-  view.setUint16(32, numChannels * bytesPerSample, true);              // block align
-  view.setUint16(34, bytesPerSample * 8, true);                        // bits per sample
+  view.setUint16(32, numChannels * bytesPerSample, true); // block align
+  view.setUint16(34, bytesPerSample * 8, true); // bits per sample
 
   // data chunk.
   writeAscii(view, 36, 'data');

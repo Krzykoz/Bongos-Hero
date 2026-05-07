@@ -64,11 +64,9 @@ function buildStars(stars: number): HTMLSpanElement {
   const span = el('span', { className: 'bh-results-stars' });
   for (let i = 0; i < 5; i++) {
     const filled = i < stars;
-    const star = el(
-      'span',
-      { className: filled ? 'bh-star-filled' : 'bh-star-empty' },
-      [filled ? '★ ' : '☆ '],
-    );
+    const star = el('span', { className: filled ? 'bh-star-filled' : 'bh-star-empty' }, [
+      filled ? '★ ' : '☆ ',
+    ]);
     span.appendChild(star);
   }
   return span;
@@ -86,7 +84,7 @@ export const resultsScene: Scene = {
     ensureBackground();
 
     const payload = sceneCtx.payload as ResultsPayload | undefined;
-    if (!payload || !payload.snapshot) {
+    if (!payload?.snapshot) {
       // No payload — bounce back.
       sceneCtx.navigate('songSelect');
       return;
@@ -97,29 +95,21 @@ export const resultsScene: Scene = {
     const snap = payload.snapshot;
     const accuracy = computeAccuracy(snap);
     const stars = computeStars(accuracy);
-    const difficulty: Difficulty = isDifficulty(payload.difficulty)
-      ? payload.difficulty
-      : 'medium';
+    const difficulty: Difficulty = isDifficulty(payload.difficulty) ? payload.difficulty : 'medium';
     const difficultyLabel = DIFFICULTY_CONFIG[difficulty].label;
 
     scoreEl = el('div', { className: 'bh-results-score' }, ['0']);
 
     const replayPayload = { songId: payload.songId, difficulty };
 
-    const playAgainBtn = el(
-      'button',
-      { type: 'button', className: 'bh-btn bh-btn-primary' },
-      ['Play again'],
-    );
+    const playAgainBtn = el('button', { type: 'button', className: 'bh-btn bh-btn-primary' }, [
+      'Play again',
+    ]);
     playAgainBtn.addEventListener('click', () => {
       sceneCtx.navigate('play', replayPayload);
     });
 
-    const songSelectBtn = el(
-      'button',
-      { type: 'button', className: 'bh-btn' },
-      ['Song select'],
-    );
+    const songSelectBtn = el('button', { type: 'button', className: 'bh-btn' }, ['Song select']);
     songSelectBtn.addEventListener('click', () => {
       sceneCtx.navigate('songSelect');
     });
@@ -158,9 +148,7 @@ export const resultsScene: Scene = {
       const target = ev.target;
       if (
         target instanceof HTMLElement &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.isContentEditable)
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
       ) {
         return;
       }

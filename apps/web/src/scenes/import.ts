@@ -207,16 +207,8 @@ export const importScene: Scene = {
       autocomplete: 'off',
       spellcheck: false,
     });
-    submitBtn = el(
-      'button',
-      { type: 'button', className: 'bh-btn bh-btn-primary' },
-      ['Import'],
-    );
-    cancelBtn = el(
-      'button',
-      { type: 'button', className: 'bh-btn bh-btn-ghost' },
-      ['Cancel'],
-    );
+    submitBtn = el('button', { type: 'button', className: 'bh-btn bh-btn-primary' }, ['Import']);
+    cancelBtn = el('button', { type: 'button', className: 'bh-btn bh-btn-ghost' }, ['Cancel']);
     statusEl = el('div', { className: 'bh-import-status' }, [
       'Paste a YouTube URL and press Import.',
     ]);

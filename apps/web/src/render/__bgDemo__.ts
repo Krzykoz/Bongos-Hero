@@ -13,16 +13,10 @@
  *     cancel();
  */
 
-import {
-  BackgroundRenderer,
-  type BackgroundRenderState,
-} from './background.js';
+import { BackgroundRenderer, type BackgroundRenderState } from './background.js';
 import { STAGE_H, STAGE_W } from './geom.js';
 
-export function runBackgroundDemo(
-  canvas: HTMLCanvasElement,
-  bpm = 120,
-): () => void {
+export function runBackgroundDemo(canvas: HTMLCanvasElement, bpm = 120): () => void {
   const ctx = canvas.getContext('2d');
   if (!ctx) {
     throw new Error('runBackgroundDemo: 2D context unavailable');

@@ -116,8 +116,8 @@ export class ScoringEngine {
   constructor(prepared: PreparedChart) {
     this.prepared = prepared;
     this.consumedSet = this._consumed;
-    this._phraseShareEarned = new Array(prepared.phrases.length).fill(0);
-    this._phraseNotesResolved = new Array(prepared.phrases.length).fill(0);
+    this._phraseShareEarned = new Array<number>(prepared.phrases.length).fill(0);
+    this._phraseNotesResolved = new Array<number>(prepared.phrases.length).fill(0);
   }
 
   // ------------------------------------------------------------------
@@ -302,12 +302,7 @@ export class ScoringEngine {
    * SP fill, emit `judgment` event, and emit `phrase-complete` if this was
    * the last note of an SP phrase.
    */
-  private _resolveNote(
-    noteIdx: number,
-    judgment: Judgment,
-    deltaMs: number,
-    nowMs: number,
-  ): void {
+  private _resolveNote(noteIdx: number, judgment: Judgment, deltaMs: number, nowMs: number): void {
     if (this._consumed.has(noteIdx)) return; // defence; should not happen
     this._consumed.add(noteIdx);
     this._notesPlayed++;

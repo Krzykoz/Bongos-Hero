@@ -6,9 +6,7 @@
  * formatting (numbers / time) consistent across the app.
  */
 
-type ElProps<K extends keyof HTMLElementTagNameMap> = Partial<
-  HTMLElementTagNameMap[K]
->;
+type ElProps<K extends keyof HTMLElementTagNameMap> = Partial<HTMLElementTagNameMap[K]>;
 
 /**
  * Create a DOM element, optionally setting properties (assigned with

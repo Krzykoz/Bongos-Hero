@@ -37,11 +37,7 @@ const TRUSS_BAR_HEIGHT = 6;
 const TRUSS_DROPS_BOTTOM_Y = 100;
 const TRUSS_DROP_HALF_W = 4;
 const TRUSS_COLOR = '#2b1c3f';
-const TRUSS_BAR_X: readonly number[] = [
-  STAGE_W * 0.2,
-  STAGE_W * 0.5,
-  STAGE_W * 0.8,
-];
+const TRUSS_BAR_X: readonly number[] = [STAGE_W * 0.2, STAGE_W * 0.5, STAGE_W * 0.8];
 
 // Spotlight beams: three trapezoids fanning down from the truss drops.
 const SPOT_TOP_Y = TRUSS_DROPS_BOTTOM_Y;
@@ -49,15 +45,10 @@ const SPOT_BOT_Y = HIGHWAY_FAR_Y - 10;
 const SPOT_TOP_HALF_W = 14;
 const SPOT_BOT_HALF_W = 80;
 /** Lateral offset at the bottom of a beam at peak ±10° wobble. */
-const SPOT_WOBBLE_AMP_PX =
-  Math.tan((10 * Math.PI) / 180) * (SPOT_BOT_Y - SPOT_TOP_Y);
+const SPOT_WOBBLE_AMP_PX = Math.tan((10 * Math.PI) / 180) * (SPOT_BOT_Y - SPOT_TOP_Y);
 const SPOT_WOBBLE_PERIOD_MS = 4000;
 const SPOT_PHASE_OFFSET = 1.7;
-const SPOT_COLORS: readonly [string, string, string] = [
-  '#ff5fb6',
-  '#5fd1ff',
-  '#fff15f',
-];
+const SPOT_COLORS: readonly [string, string, string] = ['#ff5fb6', '#5fd1ff', '#fff15f'];
 /** Beam top opacity. The beam fades to fully transparent at the bottom. */
 const SPOT_TOP_ALPHA = 0.55;
 
@@ -137,10 +128,7 @@ interface BgCache {
 
 // === Helpers ===============================================================
 
-function createOffscreen(
-  w: number,
-  h: number,
-): { canvas: AnyCanvas; ctx: AnyCtx2D } {
+function createOffscreen(w: number, h: number): { canvas: AnyCanvas; ctx: AnyCtx2D } {
   if ('OffscreenCanvas' in globalThis) {
     const canvas = new OffscreenCanvas(w, h);
     const ctx = canvas.getContext('2d');
@@ -182,14 +170,8 @@ function buildTrussSprite(): AnyCanvas {
   // Three vertical drops hanging down to TRUSS_DROPS_BOTTOM_Y.
   const dropTop = TRUSS_TOP_Y + TRUSS_BAR_HEIGHT;
   const dropHeight = TRUSS_DROPS_BOTTOM_Y - dropTop;
-  for (let i = 0; i < TRUSS_BAR_X.length; i++) {
-    const cx = TRUSS_BAR_X[i] ?? 0;
-    ctx.fillRect(
-      cx - TRUSS_DROP_HALF_W,
-      dropTop,
-      TRUSS_DROP_HALF_W * 2,
-      dropHeight,
-    );
+  for (const cx of TRUSS_BAR_X) {
+    ctx.fillRect(cx - TRUSS_DROP_HALF_W, dropTop, TRUSS_DROP_HALF_W * 2, dropHeight);
   }
 
   return canvas;
@@ -204,15 +186,7 @@ function buildBandStaticSprite(_role: BandRole): AnyCanvas {
 
   // Head (oval).
   ctx.beginPath();
-  ctx.ellipse(
-    BAND_HEAD_CX,
-    BAND_HEAD_CY,
-    BAND_HEAD_RX,
-    BAND_HEAD_RY,
-    0,
-    0,
-    Math.PI * 2,
-  );
+  ctx.ellipse(BAND_HEAD_CX, BAND_HEAD_CY, BAND_HEAD_RX, BAND_HEAD_RY, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.stroke();
 
@@ -284,10 +258,7 @@ const CROWD_B_SPRITE: AnyCanvas = buildCrowdHeadSprite(
   CROWD_B_COLOR,
 );
 
-function makeBeamGrad(
-  ctx: CanvasRenderingContext2D,
-  color: string,
-): CanvasGradient {
+function makeBeamGrad(ctx: CanvasRenderingContext2D, color: string): CanvasGradient {
   const grad = ctx.createLinearGradient(0, SPOT_TOP_Y, 0, SPOT_BOT_Y);
   grad.addColorStop(0, hexWithAlpha(color, SPOT_TOP_ALPHA));
   grad.addColorStop(1, hexWithAlpha(color, 0));
@@ -335,8 +306,7 @@ export class BackgroundRenderer {
   draw(ctx: CanvasRenderingContext2D, state: BackgroundRenderState): void {
     const cache = this.#getCache(ctx);
     const nowMs = state.nowMs;
-    const phase =
-      state.beatPhase !== undefined ? state.beatPhase : this.beatPhase(nowMs);
+    const phase = state.beatPhase ?? this.beatPhase(nowMs);
     const sp = state.starPowerActive === true;
 
     ctx.save();
@@ -370,11 +340,7 @@ export class BackgroundRenderer {
 
   // ---- internals ----------------------------------------------------------
 
-  #drawSpots(
-    ctx: CanvasRenderingContext2D,
-    cache: BgCache,
-    nowMs: number,
-  ): void {
+  #drawSpots(ctx: CanvasRenderingContext2D, cache: BgCache, nowMs: number): void {
     ctx.save();
     ctx.globalCompositeOperation = 'screen';
 
@@ -385,8 +351,7 @@ export class BackgroundRenderer {
 
     for (let i = 0; i < TRUSS_BAR_X.length; i++) {
       const cx = TRUSS_BAR_X[i] ?? 0;
-      const wobble =
-        Math.sin(wobbleBase + i * SPOT_PHASE_OFFSET) * SPOT_WOBBLE_AMP_PX;
+      const wobble = Math.sin(wobbleBase + i * SPOT_PHASE_OFFSET) * SPOT_WOBBLE_AMP_PX;
 
       const topL = cx - SPOT_TOP_HALF_W;
       const topR = cx + SPOT_TOP_HALF_W;
@@ -395,8 +360,7 @@ export class BackgroundRenderer {
       const botR = botCx + SPOT_BOT_HALF_W;
 
       const colorIdx = (((i + colorRotation) % 3) + 3) % 3;
-      const grad =
-        colorIdx === 0 ? grads[0] : colorIdx === 1 ? grads[1] : grads[2];
+      const grad = colorIdx === 0 ? grads[0] : colorIdx === 1 ? grads[1] : grads[2];
 
       ctx.beginPath();
       ctx.moveTo(topL, SPOT_TOP_Y);
@@ -466,8 +430,7 @@ export class BackgroundRenderer {
     ctx.drawImage(staticSprite, dx, dy, drawW, drawH);
 
     // Bobbing torso + arms drawn dynamically inside the sprite's local frame.
-    const bobAmount =
-      Math.sin((beatPhase + phaseOffset) * Math.PI * 2) * BAND_BOB_AMPLITUDE_PX;
+    const bobAmount = Math.sin((beatPhase + phaseOffset) * Math.PI * 2) * BAND_BOB_AMPLITUDE_PX;
 
     ctx.save();
     ctx.translate(dx, dy);
@@ -486,14 +449,8 @@ export class BackgroundRenderer {
     ctx.strokeStyle = hexWithAlpha(BAND_RIM, 0.45);
     ctx.lineWidth = BAND_RIM_WIDTH;
     ctx.beginPath();
-    ctx.moveTo(
-      BAND_HEAD_CX - BAND_TORSO_HALF_W,
-      BAND_TORSO_TOP_Y + bobAmount,
-    );
-    ctx.lineTo(
-      BAND_HEAD_CX + BAND_TORSO_HALF_W,
-      BAND_TORSO_TOP_Y + bobAmount,
-    );
+    ctx.moveTo(BAND_HEAD_CX - BAND_TORSO_HALF_W, BAND_TORSO_TOP_Y + bobAmount);
+    ctx.lineTo(BAND_HEAD_CX + BAND_TORSO_HALF_W, BAND_TORSO_TOP_Y + bobAmount);
     ctx.stroke();
 
     // Arms: drummer swings ±15°, others hang still.
@@ -501,20 +458,8 @@ export class BackgroundRenderer {
       ? Math.sin(beatPhase * Math.PI * 2) * BAND_DRUMMER_ARM_AMPLITUDE_RAD
       : 0;
     const shoulderY = BAND_SHOULDER_Y + bobAmount;
-    this.#drawArm(
-      ctx,
-      BAND_HEAD_CX - BAND_SHOULDER_OFFSET_X,
-      shoulderY,
-      -1,
-      armSwing,
-    );
-    this.#drawArm(
-      ctx,
-      BAND_HEAD_CX + BAND_SHOULDER_OFFSET_X,
-      shoulderY,
-      +1,
-      -armSwing,
-    );
+    this.#drawArm(ctx, BAND_HEAD_CX - BAND_SHOULDER_OFFSET_X, shoulderY, -1, armSwing);
+    this.#drawArm(ctx, BAND_HEAD_CX + BAND_SHOULDER_OFFSET_X, shoulderY, +1, -armSwing);
 
     ctx.restore();
   }
@@ -537,11 +482,7 @@ export class BackgroundRenderer {
     ctx.restore();
   }
 
-  #drawCrowd(
-    ctx: CanvasRenderingContext2D,
-    nowMs: number,
-    beatPhase: number,
-  ): void {
+  #drawCrowd(ctx: CanvasRenderingContext2D, nowMs: number, beatPhase: number): void {
     // Classic GH crowd hop: heads pop up at beat start, fall back smoothly.
     const eased = Math.pow(beatPhase, 0.4);
     const hop = CROWD_HOP_AMPLITUDE_PX * (1 - eased);
@@ -581,7 +522,7 @@ export class BackgroundRenderer {
   ): void {
     // Wrap horizontally via modulo. `phase` is always in [0, tileW); we
     // start one tile to the left so the leftmost head doesn't pop in.
-    const phase = (((nowMs / 1000) * speed) % tileW + tileW) % tileW;
+    const phase = ((((nowMs / 1000) * speed) % tileW) + tileW) % tileW;
     const xStart = -phase - (tileW - spriteW) * 0.5;
     for (let x = xStart; x < STAGE_W; x += tileW) {
       ctx.drawImage(sprite, x, topY, spriteW, spriteH);

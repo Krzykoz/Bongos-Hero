@@ -173,7 +173,7 @@ function spectralCentroidHz(mono: Float32Array, sampleRate: number): number {
   const denom = mono.length > 1 ? mono.length - 1 : 1;
   for (let i = 0; i < mono.length; i++) {
     const w = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / denom);
-    re[i] = (mono[i]! as number) * w;
+    re[i] = mono[i]! * w;
   }
   fftInPlace(re, im);
 
@@ -196,16 +196,13 @@ function spectralCentroidHz(mono: Float32Array, sampleRate: number): number {
 function rmsOf(buf: Float32Array): number {
   if (buf.length === 0) return 0;
   let sumSq = 0;
-  for (let i = 0; i < buf.length; i++) {
-    const v = buf[i]! as number;
+  for (const v of buf) {
     sumSq += v * v;
   }
   return Math.sqrt(sumSq / buf.length);
 }
 
-export async function extractOnsetFeatures(
-  opts: ExtractFeaturesOptions,
-): Promise<FeatureSet> {
+export async function extractOnsetFeatures(opts: ExtractFeaturesOptions): Promise<FeatureSet> {
   const windowMs = opts.windowMs ?? 60;
   const pcm = await decodePcm(opts.audioPath);
 
@@ -240,8 +237,8 @@ export async function extractOnsetFeatures(
     // Slice channels out of the interleaved buffer.
     for (let i = 0; i < len; i++) {
       const baseIdx = (startFrame + i) * channels;
-      const l = pcm[baseIdx]! as number;
-      const r = pcm[baseIdx + 1]! as number;
+      const l = pcm[baseIdx]!;
+      const r = pcm[baseIdx + 1]!;
       left[i] = l;
       right[i] = r;
       mono[i] = (l + r) * 0.5;

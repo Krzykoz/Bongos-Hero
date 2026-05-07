@@ -1,0 +1,9 @@
+node_modules
+dist
+dist-types
+build
+.cache
+*.tsbuildinfo
+package-lock.json
+data
+docs

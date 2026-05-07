@@ -50,10 +50,7 @@ export function runScoringSmoke(): void {
   const chart = buildChart();
   const prepared = prepareChart(chart);
   assert(prepared.totalNotes === 8, `expected 8 notes, got ${prepared.totalNotes}`);
-  assert(
-    prepared.phrases.length === 2,
-    `expected 2 phrases, got ${prepared.phrases.length}`,
-  );
+  assert(prepared.phrases.length === 2, `expected 2 phrases, got ${prepared.phrases.length}`);
   const phrase0 = prepared.phrases[0];
   const phrase1 = prepared.phrases[1];
   assert(phrase0?.length === 2, `phrase 0 should have 2 notes`);
@@ -147,6 +144,5 @@ export function runScoringSmoke(): void {
   // (real test lives in the play scene; this just smoke-tests the import path)
   // Avoid touching DOM.
 
-  // eslint-disable-next-line no-console
   console.log('scoring smoke ok');
 }

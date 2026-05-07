@@ -45,10 +45,7 @@ export async function runStoreSmoke(): Promise<void> {
     assert.equal(stillComplete, false, 'songIsComplete should be false after delete');
 
     const afterDelete = await listSongs();
-    assert.ok(
-      !afterDelete.find((s) => s.id === id),
-      'listSongs should no longer include the song',
-    );
+    assert.ok(!afterDelete.find((s) => s.id === id), 'listSongs should no longer include the song');
 
     // Idempotent delete should not throw.
     await deleteSong(id);

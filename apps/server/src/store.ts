@@ -2,13 +2,7 @@ import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 
 import type { SongMeta } from '@bongos-hero/shared';
 
-import {
-  DATA_ROOT,
-  audioPath,
-  chartPath,
-  metaPath,
-  songDir,
-} from './paths.js';
+import { DATA_ROOT, audioPath, chartPath, metaPath, songDir } from './paths.js';
 
 async function pathExists(p: string): Promise<boolean> {
   try {
@@ -83,9 +77,7 @@ export async function listSongs(): Promise<SongMeta[]> {
     }),
   );
 
-  const songs: SongMeta[] = candidates.filter(
-    (m): m is SongMeta => m !== null,
-  );
+  const songs: SongMeta[] = candidates.filter((m): m is SongMeta => m !== null);
   songs.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
   return songs;
 }

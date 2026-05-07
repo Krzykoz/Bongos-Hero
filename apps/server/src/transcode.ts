@@ -67,9 +67,7 @@ export async function transcodeToOgg(opts: TranscodeOptions): Promise<TranscodeR
   } catch (err) {
     const e = err as NodeJS.ErrnoException & { stderr?: string; code?: number | string };
     const tail = tailBytes(e.stderr ?? String(err), 4096);
-    throw new Error(
-      `ffmpeg transcode failed (exit ${String(e.code ?? 'null')}):\n${tail}`,
-    );
+    throw new Error(`ffmpeg transcode failed (exit ${String(e.code ?? 'null')}):\n${tail}`);
   }
 
   const durationMs = await probeDurationMs(opts.outputPath);

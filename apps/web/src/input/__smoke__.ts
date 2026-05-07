@@ -18,6 +18,5 @@ export function runInputSmoke(): void {
 
   input.detach();
 
-  // eslint-disable-next-line no-console
   console.log('smoke ok');
 }

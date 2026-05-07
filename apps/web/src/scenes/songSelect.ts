@@ -84,9 +84,7 @@ function renderDifficulty(): void {
     btn.addEventListener('click', () => setDifficulty(d));
     difficultyEl.appendChild(btn);
   }
-  const hint = el('span', { className: 'bh-diff-hint' }, [
-    'press 1 / 2 / 3 to change',
-  ]);
+  const hint = el('span', { className: 'bh-diff-hint' }, ['press 1 / 2 / 3 to change']);
   difficultyEl.appendChild(hint);
 }
 
@@ -96,17 +94,13 @@ function renderList(sceneCtx: SceneContext): void {
   clear(footerEl);
 
   if (songs.length === 0) {
-    const importNowBtn = el(
-      'button',
-      { className: 'bh-btn bh-btn-primary', type: 'button' },
-      ['Import your first song'],
-    );
+    const importNowBtn = el('button', { className: 'bh-btn bh-btn-primary', type: 'button' }, [
+      'Import your first song',
+    ]);
     importNowBtn.addEventListener('click', () => sceneCtx.navigate('import'));
     const empty = el('li', { className: 'bh-songselect-empty-cta' }, [
       el('h3', {}, ['No songs yet']),
-      el('div', {}, [
-        'Pull a track from YouTube to start playing — auto-charted in seconds.',
-      ]),
+      el('div', {}, ['Pull a track from YouTube to start playing — auto-charted in seconds.']),
       importNowBtn,
     ]);
     listEl.appendChild(empty);
@@ -185,9 +179,7 @@ async function onDelete(sceneCtx: SceneContext, song: SongMeta): Promise<void> {
     console.error('[songSelect] delete failed:', err);
     setBanner(
       sceneCtx.overlay,
-      err instanceof ApiError
-        ? `Delete failed: ${err.message}`
-        : 'Delete failed (network error).',
+      err instanceof ApiError ? `Delete failed: ${err.message}` : 'Delete failed (network error).',
     );
     return;
   }
@@ -225,17 +217,10 @@ export const songSelectScene: Scene = {
     difficultyEl = el('div', { className: 'bh-diff-picker' });
     const header = el('div', { className: 'bh-songselect-header' }, [
       el('h2', {}, ['Choose your song']),
-      el('span', { className: 'bh-songselect-help' }, [
-        '↑↓ or W/S — Enter / F / J to play',
-      ]),
+      el('span', { className: 'bh-songselect-help' }, ['↑↓ or W/S — Enter / F / J to play']),
     ]);
 
-    root = el('div', { className: 'bh-songselect' }, [
-      header,
-      difficultyEl,
-      listEl,
-      footerEl,
-    ]);
+    root = el('div', { className: 'bh-songselect' }, [header, difficultyEl, listEl, footerEl]);
     sceneCtx.overlay.appendChild(root);
     renderDifficulty();
 
@@ -243,9 +228,7 @@ export const songSelectScene: Scene = {
       const target = ev.target;
       if (
         target instanceof HTMLElement &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.isContentEditable)
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
       ) {
         return;
       }

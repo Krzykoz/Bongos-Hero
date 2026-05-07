@@ -64,7 +64,7 @@ export async function checkPrereqs(): Promise<PrereqVersions> {
     probe('aubioonset', ['-h'], () => 'ok'),
   ]);
 
-  const missing: Array<keyof PrereqVersions> = [];
+  const missing: (keyof PrereqVersions)[] = [];
   if (!ytdlp.ok) missing.push('ytdlp');
   if (!ffmpeg.ok) missing.push('ffmpeg');
   if (!aubio.ok) missing.push('aubioonset');

@@ -182,11 +182,7 @@ export class EffectsRenderer {
 
   // ---- Spawn API ----------------------------------------------------------
 
-  spawnHit(
-    lane: Lane,
-    judgment: Exclude<Judgment, 'miss'>,
-    nowMs: number,
-  ): void {
+  spawnHit(lane: Lane, judgment: Exclude<Judgment, 'miss'>, nowMs: number): void {
     const spec = HIT_SPECS[judgment];
     const cx = laneCenterX(lane, 1);
     const cy = progressToY(1);
@@ -248,9 +244,7 @@ export class EffectsRenderer {
     let sumY = 0;
     const impulses = this.#shakeImpulses;
     let writeIdx = 0;
-    for (let i = 0; i < impulses.length; i++) {
-      const imp = impulses[i];
-      if (imp === undefined) continue;
+    for (const imp of impulses) {
       const elapsed = nowMs - imp.startedAtMs;
       if (elapsed >= imp.durationMs || elapsed < 0) continue;
 
@@ -304,9 +298,8 @@ export class EffectsRenderer {
 
   /** Drop every live effect and reset the time delta cursor. */
   clear(): void {
-    for (let i = 0; i < this.#particles.length; i++) {
-      const p = this.#particles[i];
-      if (p !== undefined) p.alive = false;
+    for (const p of this.#particles) {
+      p.alive = false;
     }
     this.#poolCursor = 0;
     this.#tapRings.length = 0;
@@ -363,24 +356,18 @@ export class EffectsRenderer {
 
   // ---- Per-effect draw passes --------------------------------------------
 
-  #updateAndDrawParticles(
-    ctx: CanvasRenderingContext2D,
-    dtSec: number,
-    nowMs: number,
-  ): void {
+  #updateAndDrawParticles(ctx: CanvasRenderingContext2D, dtSec: number, nowMs: number): void {
     const pool = this.#particles;
     if (pool.length === 0) return;
 
-    const dragMul =
-      dtSec > 0 ? Math.pow(DRAG_PER_60HZ_FRAME, dtSec * 60) : 1;
+    const dragMul = dtSec > 0 ? Math.pow(DRAG_PER_60HZ_FRAME, dtSec * 60) : 1;
     const gravityDelta = GRAVITY_PX_S2 * dtSec;
 
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
 
-    for (let i = 0; i < pool.length; i++) {
-      const p = pool[i];
-      if (p === undefined || !p.alive) continue;
+    for (const p of pool) {
+      if (!p.alive) continue;
 
       const age = nowMs - p.bornMs;
       if (age < 0 || age >= p.lifeMs || p.lifeMs <= 0) {
@@ -418,9 +405,7 @@ export class EffectsRenderer {
     ctx.lineWidth = 2;
 
     let writeIdx = 0;
-    for (let i = 0; i < rings.length; i++) {
-      const ring = rings[i];
-      if (ring === undefined) continue;
+    for (const ring of rings) {
       const age = nowMs - ring.bornMs;
       if (age < 0 || age >= TAP_RING_DURATION_MS) continue;
 
@@ -448,9 +433,7 @@ export class EffectsRenderer {
     const hitY = progressToY(1);
 
     let writeIdx = 0;
-    for (let i = 0; i < flashes.length; i++) {
-      const fl = flashes[i];
-      if (fl === undefined) continue;
+    for (const fl of flashes) {
       const age = nowMs - fl.bornMs;
       if (age < 0 || age >= MISS_FLASH_DURATION_MS) continue;
 
@@ -483,9 +466,7 @@ export class EffectsRenderer {
     ctx.font = 'bold 64px serif';
 
     let writeIdx = 0;
-    for (let i = 0; i < popups.length; i++) {
-      const pop = popups[i];
-      if (pop === undefined) continue;
+    for (const pop of popups) {
       const age = nowMs - pop.bornMs;
       if (age < 0 || age >= totalLifeMs) continue;
 
@@ -545,9 +526,7 @@ export class EffectsRenderer {
     const cy = STAGE_H * 0.5;
 
     let writeIdx = 0;
-    for (let i = 0; i < banners.length; i++) {
-      const b = banners[i];
-      if (b === undefined) continue;
+    for (const b of banners) {
       const age = nowMs - b.bornMs;
       if (age < 0 || age >= totalMs) continue;
 
@@ -573,7 +552,12 @@ export class EffectsRenderer {
       // Translucent cyan beam underneath.
       ctx.save();
       ctx.globalCompositeOperation = 'screen';
-      const beamGrad = ctx.createLinearGradient(0, cy - SP_BANNER_H * 0.5, 0, cy + SP_BANNER_H * 0.5);
+      const beamGrad = ctx.createLinearGradient(
+        0,
+        cy - SP_BANNER_H * 0.5,
+        0,
+        cy + SP_BANNER_H * 0.5,
+      );
       beamGrad.addColorStop(0, 'rgba(0,0,0,0)');
       beamGrad.addColorStop(0.5, 'rgba(80,220,255,0.55)');
       beamGrad.addColorStop(1, 'rgba(0,0,0,0)');
@@ -617,10 +601,7 @@ export class EffectsRenderer {
  * boost for `perfect` (pushed toward white) so perfect bursts visibly pop
  * against great/good ones.
  */
-function particleColorRgb(
-  lane: Lane,
-  judgment: Exclude<Judgment, 'miss'>,
-): string {
+function particleColorRgb(lane: Lane, judgment: Exclude<Judgment, 'miss'>): string {
   const hex = lane === 'L' ? THEME.laneL.fill : THEME.laneR.fill;
   const base = hexToRgb(hex);
   if (judgment === 'perfect') {

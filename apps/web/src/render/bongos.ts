@@ -113,8 +113,26 @@ export class BongosRenderer {
 
     // Draw left first, then right. Order doesn't really matter — they don't
     // overlap — but keeps the logic mirror-symmetric for any future layout.
-    this.#drawDrum(ctx, LEFT_CX, cache.headL, cache.sideL, pressed.L, this.#pulseL, nowMs, PRESSED_HALO_L);
-    this.#drawDrum(ctx, RIGHT_CX, cache.headR, cache.sideR, pressed.R, this.#pulseR, nowMs, PRESSED_HALO_R);
+    this.#drawDrum(
+      ctx,
+      LEFT_CX,
+      cache.headL,
+      cache.sideL,
+      pressed.L,
+      this.#pulseL,
+      nowMs,
+      PRESSED_HALO_L,
+    );
+    this.#drawDrum(
+      ctx,
+      RIGHT_CX,
+      cache.headR,
+      cache.sideR,
+      pressed.R,
+      this.#pulseR,
+      nowMs,
+      PRESSED_HALO_R,
+    );
 
     ctx.restore();
 
@@ -183,16 +201,7 @@ export class BongosRenderer {
     ctx.beginPath();
     ctx.moveTo(cx - rx - RIM_THICKNESS, DRUM_CY);
     ctx.lineTo(cx - rx - RIM_THICKNESS, DRUM_CY + SIDE_WALL_DEPTH);
-    ctx.ellipse(
-      cx,
-      DRUM_CY + SIDE_WALL_DEPTH,
-      rx + RIM_THICKNESS,
-      ry,
-      0,
-      Math.PI,
-      0,
-      true,
-    );
+    ctx.ellipse(cx, DRUM_CY + SIDE_WALL_DEPTH, rx + RIM_THICKNESS, ry, 0, Math.PI, 0, true);
     ctx.lineTo(cx + rx + RIM_THICKNESS, DRUM_CY);
     ctx.closePath();
     ctx.fillStyle = sideGrad;

@@ -52,7 +52,7 @@ const PERSPECTIVE_K = 0.15;
  * to module scope so the per-frame call doesn't recompute them.
  */
 const RAW_AT_0 = 1 / (PERSPECTIVE_K + 1); // raw(p=0) -> z=1
-const RAW_AT_1 = 1 / PERSPECTIVE_K;       // raw(p=1) -> z=0
+const RAW_AT_1 = 1 / PERSPECTIVE_K; // raw(p=1) -> z=0
 const RAW_SPAN = RAW_AT_1 - RAW_AT_0;
 const Y_SPAN = HIGHWAY_NEAR_Y - HIGHWAY_FAR_Y;
 

@@ -158,7 +158,7 @@ export class AudioEngine {
   }
 
   /** Seeks to `ms` while preserving play/pause state. */
-  async seek(ms: number): Promise<void> {
+  seek(ms: number): void {
     if (!this._buffer) return;
     const dur = this._buffer.duration * 1000;
     const target = Math.max(0, Math.min(ms, dur));

@@ -43,11 +43,9 @@ const PROGRESS_RE = /\[download\]\s+([0-9]+(?:\.[0-9]+)?)%/;
 async function fetchInfo(url: string): Promise<DownloadResult> {
   let json: string;
   try {
-    const { stdout } = await execFileP(
-      'yt-dlp',
-      ['-J', '--no-warnings', '--no-playlist', url],
-      { maxBuffer: 64 * 1024 * 1024 },
-    );
+    const { stdout } = await execFileP('yt-dlp', ['-J', '--no-warnings', '--no-playlist', url], {
+      maxBuffer: 64 * 1024 * 1024,
+    });
     json = stdout;
   } catch (err) {
     const e = err as NodeJS.ErrnoException & { stderr?: string };
@@ -70,9 +68,8 @@ async function fetchInfo(url: string): Promise<DownloadResult> {
       : typeof info.channel === 'string' && info.channel.length > 0
         ? info.channel
         : undefined;
-  const durationSec = typeof info.duration === 'number' && Number.isFinite(info.duration)
-    ? info.duration
-    : 0;
+  const durationSec =
+    typeof info.duration === 'number' && Number.isFinite(info.duration) ? info.duration : 0;
   const durationMs = Math.round(durationSec * 1000);
 
   const result: DownloadResult = {
@@ -108,7 +105,7 @@ function runDownload(opts: DownloadOptions): Promise<void> {
 
     const handleLine = (line: string): void => {
       const m = PROGRESS_RE.exec(line);
-      if (!m || !m[1]) return;
+      if (!m?.[1]) return;
       const pct = Number.parseFloat(m[1]);
       if (!Number.isFinite(pct)) return;
       const p = Math.max(0, Math.min(1, pct / 100));
@@ -166,9 +163,7 @@ async function findRawFile(destDir: string): Promise<string> {
   const entries = await readdir(destDir);
   const match = entries.find((name) => name.startsWith('raw.'));
   if (!match) {
-    throw new Error(
-      `yt-dlp finished but no file starting with "raw." was found in ${destDir}`,
-    );
+    throw new Error(`yt-dlp finished but no file starting with "raw." was found in ${destDir}`);
   }
   return path.join(destDir, match);
 }

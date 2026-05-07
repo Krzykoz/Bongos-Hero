@@ -75,7 +75,7 @@ interface PlayState {
   youtube: YouTubeBackground | null;
   /** Wall-clock ms of the last YT drift correction tick. */
   ytLastDriftMs: number;
-  unsubscribers: Array<() => void>;
+  unsubscribers: (() => void)[];
   /** performance.now() at the start of the count-in. */
   countInStartedAtPerf: number;
   /** Monotonic combo at the last frame, used to detect milestone crossings. */
@@ -126,17 +126,9 @@ function showLoadingOverlay(sceneCtx: SceneContext, message: string): void {
   sceneCtx.overlay.appendChild(overlayRoot);
 }
 
-function showErrorOverlay(
-  sceneCtx: SceneContext,
-  title: string,
-  message: string,
-): void {
+function showErrorOverlay(sceneCtx: SceneContext, title: string, message: string): void {
   removeOverlayRoot();
-  const backBtn = el(
-    'button',
-    { className: 'bh-btn bh-btn-primary', type: 'button' },
-    ['Back'],
-  );
+  const backBtn = el('button', { className: 'bh-btn bh-btn-primary', type: 'button' }, ['Back']);
   backBtn.addEventListener('click', () => sceneCtx.navigate('songSelect'));
   overlayRoot = el('div', { className: 'bh-overlay-center' }, [
     el('div', { className: 'bh-overlay-card bh-error' }, [
@@ -159,9 +151,7 @@ function showPauseOverlay(sceneCtx: SceneContext): void {
   removePauseOverlay();
   pauseOverlay = el('div', { className: 'bh-pause' }, [
     'PAUSED',
-    el('span', { className: 'bh-pause-hint' }, [
-      'press ESC to resume — Q to quit',
-    ]),
+    el('span', { className: 'bh-pause-hint' }, ['press ESC to resume — Q to quit']),
   ]);
   sceneCtx.overlay.appendChild(pauseOverlay);
 }
@@ -182,10 +172,7 @@ function getMasterClockMs(s: PlayState): number {
   return 0;
 }
 
-function handleScoringEvent(
-  s: PlayState,
-  ev: ScoringEvent,
-): void {
+function handleScoringEvent(s: PlayState, ev: ScoringEvent): void {
   switch (ev.type) {
     case 'judgment':
       if (ev.judgment === 'miss') {
@@ -352,11 +339,7 @@ export const playScene: Scene = {
 
     const payload = sceneCtx.payload as PlayPayload | undefined;
     if (!payload || typeof payload.songId !== 'string') {
-      showErrorOverlay(
-        sceneCtx,
-        'Missing song',
-        'No songId was provided to the play scene.',
-      );
+      showErrorOverlay(sceneCtx, 'Missing song', 'No songId was provided to the play scene.');
       return;
     }
 
@@ -384,9 +367,7 @@ export const playScene: Scene = {
       showErrorOverlay(
         sceneCtx,
         'Could not load chart',
-        err instanceof ApiError
-          ? `${err.message}`
-          : 'Network error while fetching the chart.',
+        err instanceof ApiError ? `${err.message}` : 'Network error while fetching the chart.',
       );
       s.phase = 'error';
       return;
@@ -472,9 +453,7 @@ export const playScene: Scene = {
       const target = ev.target;
       if (
         target instanceof HTMLElement &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.isContentEditable)
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
       ) {
         return;
       }

@@ -112,8 +112,7 @@ export class HighwayRenderer {
     // 5. Horizontal "fret" depth-cue lines.
     ctx.strokeStyle = THEME.highwayLine;
     ctx.lineWidth = 1.5;
-    for (let i = 0; i < FRET_PROGRESSES.length; i++) {
-      const p = FRET_PROGRESSES[i] ?? 0;
+    for (const p of FRET_PROGRESSES) {
       const y = progressToY(p);
       const hw = halfWidthAt(p);
       ctx.beginPath();
@@ -162,12 +161,7 @@ export class HighwayRenderer {
     const nearRight = HIGHWAY_CENTER_X + HIGHWAY_NEAR_HALF_W;
 
     ctx.fillStyle = THEME.hitLineGlow;
-    ctx.fillRect(
-      nearLeft,
-      hitY - glowHeight * 0.5,
-      nearRight - nearLeft,
-      glowHeight,
-    );
+    ctx.fillRect(nearLeft, hitY - glowHeight * 0.5, nearRight - nearLeft, glowHeight);
 
     ctx.strokeStyle = THEME.hitLine;
     ctx.lineWidth = 2;
@@ -193,22 +187,13 @@ export class HighwayRenderer {
     ctx.closePath();
   }
 
-  #drawLaneGlow(
-    ctx: CanvasRenderingContext2D,
-    grad: CanvasGradient,
-    lane: Lane,
-  ): void {
+  #drawLaneGlow(ctx: CanvasRenderingContext2D, grad: CanvasGradient, lane: Lane): void {
     const cx = laneCenterX(lane, 1);
     const cy = HIGHWAY_NEAR_Y;
     ctx.save();
     ctx.translate(cx, cy);
     ctx.fillStyle = grad;
-    ctx.fillRect(
-      -LANE_GLOW_RADIUS,
-      -LANE_GLOW_RADIUS,
-      LANE_GLOW_RADIUS * 2,
-      LANE_GLOW_RADIUS * 2,
-    );
+    ctx.fillRect(-LANE_GLOW_RADIUS, -LANE_GLOW_RADIUS, LANE_GLOW_RADIUS * 2, LANE_GLOW_RADIUS * 2);
     ctx.restore();
   }
 
@@ -226,12 +211,7 @@ export class HighwayRenderer {
     bg.addColorStop(0, THEME.bgTop);
     bg.addColorStop(1, THEME.bgBottom);
 
-    const highwayFill = ctx.createLinearGradient(
-      0,
-      HIGHWAY_FAR_Y,
-      0,
-      HIGHWAY_NEAR_Y,
-    );
+    const highwayFill = ctx.createLinearGradient(0, HIGHWAY_FAR_Y, 0, HIGHWAY_NEAR_Y);
     highwayFill.addColorStop(0, '#15091e');
     highwayFill.addColorStop(1, '#241038');
 

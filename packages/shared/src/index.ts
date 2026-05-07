@@ -36,13 +36,7 @@ export interface SongMeta {
 
 // ---- Job / API types ----
 
-export type JobStatus =
-  | 'queued'
-  | 'downloading'
-  | 'transcoding'
-  | 'charting'
-  | 'done'
-  | 'error';
+export type JobStatus = 'queued' | 'downloading' | 'transcoding' | 'charting' | 'done' | 'error';
 
 export interface JobState {
   id: string;

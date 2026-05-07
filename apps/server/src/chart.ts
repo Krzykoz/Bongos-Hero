@@ -36,7 +36,7 @@ function median(values: number[]): number {
   if ((sorted.length & 1) === 1) {
     return sorted[mid]!;
   }
-  return ((sorted[mid - 1]! as number) + (sorted[mid]! as number)) / 2;
+  return (sorted[mid - 1]! + sorted[mid]!) / 2;
 }
 
 function flip(lane: Lane): Lane {
@@ -97,7 +97,7 @@ export function buildChart(opts: BuildChartOptions): ChartV1 {
   const minSameLaneSec = minSameLaneSpacingMs / 1000;
   for (let i = 1; i < kept.length; i++) {
     if (lanes[i] === lanes[i - 1]) {
-      const dt = (kept[i]!.tSec) - (kept[i - 1]!.tSec);
+      const dt = kept[i]!.tSec - kept[i - 1]!.tSec;
       if (dt < minSameLaneSec) {
         lanes[i] = flip(lanes[i]!);
       }

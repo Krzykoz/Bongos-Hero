@@ -40,10 +40,7 @@ async function readBody(res: Response): Promise<unknown> {
   }
 }
 
-async function request<T>(
-  path: string,
-  init?: RequestInit & { jsonBody?: unknown },
-): Promise<T> {
+async function request<T>(path: string, init?: RequestInit & { jsonBody?: unknown }): Promise<T> {
   const headers = new Headers(init?.headers);
   let body: BodyInit | undefined = init?.body ?? undefined;
 

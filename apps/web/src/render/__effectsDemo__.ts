@@ -19,12 +19,8 @@ import { EffectsRenderer } from './effects.js';
 import { STAGE_H, STAGE_W } from './geom.js';
 import { HighwayRenderer, type HighwayRenderState } from './highway.js';
 
-const HIT_JUDGMENTS: ReadonlyArray<Exclude<Judgment, 'miss'>> = [
-  'perfect',
-  'great',
-  'good',
-];
-const LANES: ReadonlyArray<Lane> = ['L', 'R'];
+const HIT_JUDGMENTS: readonly Exclude<Judgment, 'miss'>[] = ['perfect', 'great', 'good'];
+const LANES: readonly Lane[] = ['L', 'R'];
 
 /**
  * Runs the rAF loop. Returns a cancel function that stops the loop.
@@ -61,9 +57,7 @@ export function runEffectsDemo(canvas: HTMLCanvasElement): () => void {
 
     if (nowMs >= nextHitMs) {
       const lane = LANES[Math.floor(Math.random() * LANES.length)] ?? 'L';
-      const judgment =
-        HIT_JUDGMENTS[Math.floor(Math.random() * HIT_JUDGMENTS.length)] ??
-        'good';
+      const judgment = HIT_JUDGMENTS[Math.floor(Math.random() * HIT_JUDGMENTS.length)] ?? 'good';
       effects.spawnHit(lane, judgment, nowMs);
       nextHitMs = nowMs + 250;
     }

@@ -1,11 +1,6 @@
 import type { Lane } from '@bongos-hero/shared';
 
-import {
-  KEY_PAUSE,
-  KEY_STARPOWER,
-  LEFT_SIDE_KEYS,
-  RIGHT_SIDE_KEYS,
-} from './codes.js';
+import { KEY_PAUSE, KEY_STARPOWER, LEFT_SIDE_KEYS, RIGHT_SIDE_KEYS } from './codes.js';
 
 /** Discrete game actions that aren't lane hits. */
 export type GameAction = 'pause' | 'starpower';
@@ -114,7 +109,7 @@ export class KeyboardInput {
     const target = this.target as EventTarget;
     target.addEventListener('keydown', this.onKeyDown as EventListener, { passive: false });
     target.addEventListener('keyup', this.onKeyUp as EventListener, { passive: false });
-    target.addEventListener('blur', this.onBlur as EventListener);
+    target.addEventListener('blur', this.onBlur);
 
     // Visibility lives on `document`, not `window`/element targets.
     if (typeof document !== 'undefined') {
@@ -130,7 +125,7 @@ export class KeyboardInput {
     const target = this.target as EventTarget;
     target.removeEventListener('keydown', this.onKeyDown as EventListener);
     target.removeEventListener('keyup', this.onKeyUp as EventListener);
-    target.removeEventListener('blur', this.onBlur as EventListener);
+    target.removeEventListener('blur', this.onBlur);
 
     if (typeof document !== 'undefined') {
       document.removeEventListener('visibilitychange', this.onVisibilityChange);

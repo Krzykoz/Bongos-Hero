@@ -15,11 +15,7 @@
 import type { ChartNote, ChartV1 } from '@bongos-hero/shared';
 
 import { laneCenterX, progressToY, scaleAt } from './geom.js';
-import {
-  getNoteSprite,
-  getSpOverlaySprite,
-  type NoteSprite,
-} from './noteSprites.js';
+import { getNoteSprite, getSpOverlaySprite, type NoteSprite } from './noteSprites.js';
 
 const DEFAULT_TRAVEL_MS = 1500;
 const DEFAULT_LATE_GRACE_MS = 110;
@@ -112,7 +108,6 @@ export class NotesRenderer {
         const prev = this.#notes[i - 1];
         const cur = this.#notes[i];
         if (prev !== undefined && cur !== undefined && cur.tMs < prev.tMs) {
-          // eslint-disable-next-line no-console
           console.warn(
             'NotesRenderer: chart notes are not sorted ascending by tMs; ' +
               'cursor walking will be incorrect.',
@@ -184,9 +179,9 @@ export class NotesRenderer {
 
     // Pull all hot-loop dependencies into local consts so the JIT can keep
     // them in registers and we never re-read instance state per note.
-    const spriteL = this.#spriteL as NoteSprite;
-    const spriteR = this.#spriteR as NoteSprite;
-    const spOverlay = this.#spOverlay as NoteSprite;
+    const spriteL = this.#spriteL!;
+    const spriteR = this.#spriteR!;
+    const spOverlay = this.#spOverlay!;
     const sourceL = spriteL.source;
     const sourceR = spriteR.source;
     const sourceSp = spOverlay.source;
@@ -206,7 +201,7 @@ export class NotesRenderer {
     ctx.save();
 
     for (let i = firstIdx; i <= lastIdx; i++) {
-      if (hitSet !== undefined && hitSet.has(i)) continue;
+      if (hitSet?.has(i)) continue;
 
       const note = notes[i];
       if (note === undefined) continue;
@@ -237,13 +232,7 @@ export class NotesRenderer {
         ctx.globalAlpha = 0.35;
         const ghostSize = drawSize * ghostFactor;
         const ghostOffset = (ghostSize - drawSize) * 0.5;
-        ctx.drawImage(
-          source,
-          dx - ghostOffset,
-          dy - ghostOffset,
-          ghostSize,
-          ghostSize,
-        );
+        ctx.drawImage(source, dx - ghostOffset, dy - ghostOffset, ghostSize, ghostSize);
         ctx.globalAlpha = 1;
         ctx.globalCompositeOperation = 'source-over';
       }

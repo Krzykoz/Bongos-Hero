@@ -45,10 +45,7 @@ export interface PreparedChart {
  * @param chart Raw chart from the server.
  * @param difficulty Difficulty to play at; defaults to `'medium'`.
  */
-export function prepareChart(
-  chart: ChartV1,
-  difficulty: Difficulty = 'medium',
-): PreparedChart {
+export function prepareChart(chart: ChartV1, difficulty: Difficulty = 'medium'): PreparedChart {
   const cfg = DIFFICULTY_CONFIG[difficulty];
   const filteredNotes = filterNotesForDifficulty(chart.notes, cfg.minSpacingMs);
 
@@ -62,8 +59,8 @@ export function prepareChart(
   const offset = playableChart.audioOffsetMs;
   const total = filteredNotes.length;
 
-  const adjusted: number[] = new Array(total);
-  const phraseId: number[] = new Array(total);
+  const adjusted: number[] = new Array<number>(total);
+  const phraseId: number[] = new Array<number>(total);
   const phrases: number[][] = [];
 
   let currentPhrase: number[] | null = null;
@@ -111,10 +108,7 @@ export function prepareChart(
  * if a same-lane candidate is followed shortly by an opposite-lane one — this
  * preserves the L↔R "groove" of the chart even when density is dropped.
  */
-function filterNotesForDifficulty(
-  notes: readonly ChartNote[],
-  minSpacingMs: number,
-): ChartNote[] {
+function filterNotesForDifficulty(notes: readonly ChartNote[], minSpacingMs: number): ChartNote[] {
   if (minSpacingMs <= 0 || notes.length === 0) return notes.slice();
 
   const altWindowMs = Math.min(60, Math.floor(minSpacingMs * 0.3));

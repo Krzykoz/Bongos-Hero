@@ -62,8 +62,8 @@ export function extractYouTubeId(input: string | null | undefined): string | nul
     const v = url.searchParams.get('v');
     if (v && /^[A-Za-z0-9_-]{11}$/.test(v)) return v;
     // /embed/ID, /v/ID, /shorts/ID
-    const m = url.pathname.match(/^\/(?:embed|v|shorts)\/([A-Za-z0-9_-]{11})/);
-    if (m && m[1]) return m[1];
+    const m = /^\/(?:embed|v|shorts)\/([A-Za-z0-9_-]{11})/.exec(url.pathname);
+    if (m?.[1]) return m[1];
   }
   return null;
 }
@@ -122,17 +122,15 @@ let ytLoadPromise: Promise<YTNamespace> | null = null;
 function loadYouTubeApi(): Promise<YTNamespace> {
   if (ytLoadPromise) return ytLoadPromise;
   const w = window as WindowWithYT;
-  if (w.YT && w.YT.Player) {
+  if (w.YT?.Player) {
     ytLoadPromise = Promise.resolve(w.YT);
     return ytLoadPromise;
   }
   ytLoadPromise = new Promise<YTNamespace>((resolve, reject) => {
-    const existing = document.querySelector<HTMLScriptElement>(
-      'script[data-bongos-yt-api]',
-    );
+    const existing = document.querySelector<HTMLScriptElement>('script[data-bongos-yt-api]');
     const onReady = (): void => {
       const ww = window as WindowWithYT;
-      if (ww.YT && ww.YT.Player) resolve(ww.YT);
+      if (ww.YT?.Player) resolve(ww.YT);
       else reject(new Error('YouTube IFrame API loaded but YT.Player missing'));
     };
 
@@ -150,7 +148,7 @@ function loadYouTubeApi(): Promise<YTNamespace> {
       const script = document.createElement('script');
       script.src = 'https://www.youtube.com/iframe_api';
       script.async = true;
-      script.dataset['bongosYtApi'] = '1';
+      script.dataset.bongosYtApi = '1';
       script.onerror = (): void => {
         reject(new Error('Failed to load https://www.youtube.com/iframe_api'));
       };
@@ -160,7 +158,7 @@ function loadYouTubeApi(): Promise<YTNamespace> {
     // Hard timeout so a blocked CDN doesn't hang the play scene forever.
     setTimeout(() => {
       const ww = window as WindowWithYT;
-      if (ww.YT && ww.YT.Player) resolve(ww.YT);
+      if (ww.YT?.Player) resolve(ww.YT);
       else reject(new Error('YouTube IFrame API load timed out'));
     }, 5000);
   });
@@ -191,14 +189,14 @@ export interface YouTubeBackgroundOptions {
 }
 
 type Phase =
-  | 'idle'        // constructed, not loaded yet
-  | 'loading'     // IFrame API loading + player constructing
-  | 'ready'       // player ready (cued), audio not yet started
-  | 'starting'    // we called play(), waiting for PLAYING state
-  | 'playing'     // confirmed playing — `shouldShow()` returns true
-  | 'paused'      // mirrored from audio.pause()
-  | 'failed'      // permanent error — never show
-  | 'disposed';   // unmounted
+  | 'idle' // constructed, not loaded yet
+  | 'loading' // IFrame API loading + player constructing
+  | 'ready' // player ready (cued), audio not yet started
+  | 'starting' // we called play(), waiting for PLAYING state
+  | 'playing' // confirmed playing — `shouldShow()` returns true
+  | 'paused' // mirrored from audio.pause()
+  | 'failed' // permanent error — never show
+  | 'disposed'; // unmounted
 
 const DRIFT_THRESHOLD_MS = 400;
 
@@ -453,7 +451,7 @@ export class YouTubeBackground {
       }
       this.player = null;
     }
-    if (this.mountEl && this.mountEl.parentNode) {
+    if (this.mountEl?.parentNode) {
       try {
         this.mountEl.parentNode.removeChild(this.mountEl);
       } catch {

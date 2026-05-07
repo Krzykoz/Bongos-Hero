@@ -47,16 +47,7 @@ export async function detectOnsets(opts: DetectOnsetsOptions): Promise<OnsetTime
   // `silence` is intentionally unused at the binary level (see jsdoc above).
   void opts.silence;
 
-  const args = [
-    '-i',
-    opts.audioPath,
-    '-O',
-    method,
-    '-t',
-    String(threshold),
-    '-s',
-    '-90',
-  ];
+  const args = ['-i', opts.audioPath, '-O', method, '-t', String(threshold), '-s', '-90'];
 
   let stdout: string;
   try {

@@ -102,10 +102,7 @@ interface GradientCache {
   spMeterFill: CanvasGradient;
 }
 
-function buildRingGradient(
-  ctx: CanvasRenderingContext2D,
-  color: RingColor,
-): CanvasGradient {
+function buildRingGradient(ctx: CanvasRenderingContext2D, color: RingColor): CanvasGradient {
   // Centred at origin: caller translates to badge centre before filling.
   // Inner edge transparent, peak colour at the ring radius (~r=56), outer
   // glow falloff back to transparent at r=80.
@@ -235,10 +232,7 @@ export class HudRenderer {
       let trimmed = title;
       // Walk back one char at a time until "trimmed…" fits. The leading
       // length>0 guard prevents an infinite loop on absurd font sizes.
-      while (
-        trimmed.length > 0 &&
-        ctx.measureText(`${trimmed}…`).width > TITLE_MAX_W
-      ) {
+      while (trimmed.length > 0 && ctx.measureText(`${trimmed}…`).width > TITLE_MAX_W) {
         trimmed = trimmed.slice(0, -1);
       }
       display = `${trimmed}…`;
@@ -376,15 +370,9 @@ export class HudRenderer {
       // stripe origin with songTimeMs.
       const stripeStep = 16;
       const stripeOffset = (songTimeMs / 30) % stripeStep;
-      ctx.strokeStyle = spActive
-        ? 'rgba(255,255,255,0.22)'
-        : 'rgba(255,255,255,0.10)';
+      ctx.strokeStyle = spActive ? 'rgba(255,255,255,0.22)' : 'rgba(255,255,255,0.10)';
       ctx.lineWidth = 1;
-      for (
-        let sx = SP_X - SP_H - stripeOffset;
-        sx < SP_X + SP_W + SP_H;
-        sx += stripeStep
-      ) {
+      for (let sx = SP_X - SP_H - stripeOffset; sx < SP_X + SP_W + SP_H; sx += stripeStep) {
         ctx.beginPath();
         ctx.moveTo(sx, SP_Y + SP_H);
         ctx.lineTo(sx + SP_H, SP_Y);
@@ -407,21 +395,12 @@ export class HudRenderer {
     ctx.stroke();
   }
 
-  #drawLaneIndicators(
-    ctx: CanvasRenderingContext2D,
-    pressedL: boolean,
-    pressedR: boolean,
-  ): void {
+  #drawLaneIndicators(ctx: CanvasRenderingContext2D, pressedL: boolean, pressedR: boolean): void {
     this.#drawKeyCap(ctx, 'L', 'F', pressedL);
     this.#drawKeyCap(ctx, 'R', 'J', pressedR);
   }
 
-  #drawKeyCap(
-    ctx: CanvasRenderingContext2D,
-    lane: Lane,
-    letter: string,
-    pressed: boolean,
-  ): void {
+  #drawKeyCap(ctx: CanvasRenderingContext2D, lane: Lane, letter: string, pressed: boolean): void {
     const cx = laneCenterX(lane, 1);
     const cy = KEY_TOP + KEY_H * 0.5;
     const colors = lane === 'L' ? THEME.laneL : THEME.laneR;

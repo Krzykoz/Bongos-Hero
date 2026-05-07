@@ -45,7 +45,9 @@ export function runEngineSmoke(): void {
   // Calibration offset is reflected immediately.
   eng.setAudioOffsetMs(42);
   if (eng.currentTimeMs() !== 42) {
-    throw new Error(`expected currentTimeMs() === 42 after setAudioOffsetMs(42), got ${eng.currentTimeMs()}`);
+    throw new Error(
+      `expected currentTimeMs() === 42 after setAudioOffsetMs(42), got ${eng.currentTimeMs()}`,
+    );
   }
 
   // latency.ts: round-trip + clamping.
@@ -59,6 +61,5 @@ export function runEngineSmoke(): void {
   }
   saveAudioOffsetMs(0);
 
-  // eslint-disable-next-line no-console
   console.log('smoke ok');
 }

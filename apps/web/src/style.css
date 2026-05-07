@@ -1,10 +1,25 @@
 :root {
   color-scheme: dark;
-  font-family: 'Segoe UI', system-ui, -apple-system, Roboto, sans-serif;
+  font-family:
+    'Segoe UI',
+    system-ui,
+    -apple-system,
+    Roboto,
+    sans-serif;
 }
 
-* { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; color: #f5f0e3; }
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+  color: #f5f0e3;
+}
 
 #app {
   position: fixed;
@@ -30,7 +45,9 @@ html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hi
   display: none;
 }
 
-#yt-bg.bh-yt-active { display: block; }
+#yt-bg.bh-yt-active {
+  display: block;
+}
 
 #yt-bg iframe {
   position: absolute;
@@ -61,23 +78,13 @@ html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hi
 #yt-bg::before {
   top: 0;
   height: 100px;
-  background: linear-gradient(
-    to bottom,
-    #000 0,
-    #000 50px,
-    rgba(0, 0, 0, 0) 100px
-  );
+  background: linear-gradient(to bottom, #000 0, #000 50px, rgba(0, 0, 0, 0) 100px);
 }
 
 #yt-bg::after {
   bottom: 0;
   height: 110px;
-  background: linear-gradient(
-    to top,
-    #000 0,
-    #000 60px,
-    rgba(0, 0, 0, 0) 110px
-  );
+  background: linear-gradient(to top, #000 0, #000 60px, rgba(0, 0, 0, 0) 110px);
 }
 
 #game {
@@ -96,4 +103,6 @@ html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hi
   pointer-events: none;
 }
 
-#overlay > * { pointer-events: auto; }
+#overlay > * {
+  pointer-events: auto;
+}

@@ -38,7 +38,7 @@ function resolveAudioContextCtor(): typeof AudioContext {
   return Ctor;
 }
 
-const BEAT_INTERVAL_MS = 600;          // 100 BPM
+const BEAT_INTERVAL_MS = 600; // 100 BPM
 const SCHEDULE_LOOKAHEAD_MS = 1_000;
 const SCHEDULE_TICK_MS = 250;
 const VALID_DELTA_MS = 250;
@@ -226,21 +226,11 @@ export const calibrationScene: Scene = {
     tapsValueEl = el('span', { className: 'bh-cal-value' }, ['0']);
     hintEl = el('div', { className: 'bh-cal-hint' }, ['Need at least 3 taps (have 0).']);
 
-    const saveBtn = el(
-      'button',
-      { type: 'button', className: 'bh-btn bh-btn-primary' },
-      ['Save'],
-    );
-    const resetBtn = el(
-      'button',
-      { type: 'button', className: 'bh-btn' },
-      ['Reset'],
-    );
-    const cancelBtn = el(
-      'button',
-      { type: 'button', className: 'bh-btn bh-btn-ghost' },
-      ['Cancel'],
-    );
+    const saveBtn = el('button', { type: 'button', className: 'bh-btn bh-btn-primary' }, ['Save']);
+    const resetBtn = el('button', { type: 'button', className: 'bh-btn' }, ['Reset']);
+    const cancelBtn = el('button', { type: 'button', className: 'bh-btn bh-btn-ghost' }, [
+      'Cancel',
+    ]);
 
     const card = el('div', { className: 'bh-cal-card' }, [
       el('h2', {}, ['Calibration']),
@@ -342,9 +332,7 @@ export const calibrationScene: Scene = {
       const target = ev.target;
       if (
         target instanceof HTMLElement &&
-        (target.tagName === 'INPUT' ||
-          target.tagName === 'TEXTAREA' ||
-          target.isContentEditable)
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
       ) {
         return;
       }
