@@ -1,14 +1,17 @@
 /**
  * Visual effects layer for the Bongos Hero highway.
  *
- * Owns four families of feedback:
+ * Owns five families of feedback:
  *   1. Hit bursts        — radial particle pop + expanding white "tap ring"
  *      when a note is judged perfect/great/good.
  *   2. Miss flashes      — translucent red rectangle over the failed lane,
  *      coupled with a screen-shake impulse.
- *   3. Combo popups      — large "100", "200", … floating text spawned by the
+ *   3. Comic miss bursts — jagged starburst with an outlined onomatopoeic
+ *      word ("BONK!", "POW!", …) shifted outward of the failed lane, so the
+ *      note approach path is not occluded. Spawned alongside the miss flash.
+ *   4. Combo popups      — large "100", "200", … floating text spawned by the
  *      play scene at score thresholds.
- *   4. Star Power banner — diagonal "STAR POWER!" sweep across the stage when
+ *   5. Star Power banner — diagonal "STAR POWER!" sweep across the stage when
  *      SP is activated, plus a translucent screen-blended cyan beam.
  *
  * Plus a screen-shake bus: misses push impulses, the play scene reads the
@@ -75,6 +78,75 @@ const SP_BANNER_H = 120;
 const SP_PULSE_HZ = 6;
 const SP_PULSE_AMPLITUDE = 0.05;
 
+/** Comic-style miss burst keyframes (total 500 ms). */
+const COMIC_POPIN_MS = 100;
+const COMIC_SETTLE_MS = 80;
+const COMIC_HOLD_MS = 200;
+const COMIC_FADE_MS = 120;
+const COMIC_TOTAL_MS = COMIC_POPIN_MS + COMIC_SETTLE_MS + COMIC_HOLD_MS + COMIC_FADE_MS;
+
+/** Comic burst geometry. */
+const COMIC_OUTER_R = 80;
+const COMIC_INNER_R = 48;
+const COMIC_SPIKES = 12;
+const COMIC_FONT_PX = 46;
+const COMIC_TEXT_STROKE_PX = 6;
+const COMIC_OUTLINE_STROKE_PX = 5;
+
+/**
+ * Vertical anchor of the burst centre. Sits above the hit line (`y=600`) and
+ * below the highway midpoint, comfortably out of the typical note approach
+ * window once combined with the outward lateral bias below.
+ */
+const COMIC_BASE_Y = 460;
+/**
+ * Horizontal push **away from highway centre**, so the burst sits outside the
+ * lane edge and does not occlude the note path. L misses shift further left,
+ * R misses further right.
+ */
+const COMIC_LANE_OUTWARD_PX = 100;
+const COMIC_X_JITTER_PX = 18;
+const COMIC_Y_JITTER_PX = 14;
+const COMIC_TILT_RANGE_RAD = 0.35;
+
+/** Cap simultaneous live bursts. Drop the oldest on overflow. */
+const COMIC_MAX_LIVE = 4;
+
+/** Hold-phase wobble. */
+const COMIC_WOBBLE_HZ = 8;
+const COMIC_WOBBLE_AMPLITUDE = 0.025;
+
+/** Fade-phase upward drift. */
+const COMIC_DRIFT_PX = 22;
+
+const COMIC_WORDS: readonly string[] = [
+  'BONK!',
+  'OOF!',
+  'WHIFF!',
+  'POW!',
+  'CLUNK!',
+  'OUCH!',
+  'DOH!',
+  'WHAM!',
+  'OOPS!',
+  'MISS!',
+];
+
+interface ComicPalette {
+  /** Outer starburst fill. */
+  fill: string;
+  /** Inner highlight fill (lighter). */
+  inner: string;
+}
+
+const COMIC_PALETTES: readonly ComicPalette[] = [
+  { fill: '#ffd23f', inner: '#fff48a' },
+  { fill: '#ff5a3c', inner: '#ff9b7a' },
+];
+
+const COMIC_FALLBACK_WORD = 'BONK!';
+const COMIC_FALLBACK_PALETTE: ComicPalette = { fill: '#ffd23f', inner: '#fff48a' };
+
 // ---- Particle pool ----------------------------------------------------------
 
 interface Particle {
@@ -113,6 +185,17 @@ interface ComboPopup {
 
 interface StarPowerBanner {
   bornMs: number;
+}
+
+interface ComicBurst {
+  bornMs: number;
+  /** World-space centre X (already includes lateral outward bias + jitter). */
+  cx: number;
+  /** World-space centre Y. */
+  cy: number;
+  word: string;
+  palette: ComicPalette;
+  tiltRad: number;
 }
 
 // Hit-burst tuning per judgment.
@@ -154,6 +237,12 @@ export class EffectsRenderer {
   readonly #shakeImpulses: ShakeImpulse[] = [];
   readonly #comboPopups: ComboPopup[] = [];
   readonly #starBanners: StarPowerBanner[] = [];
+  readonly #comicBursts: ComicBurst[] = [];
+
+  /** Index of the last comic word picked, so we can avoid an immediate repeat. */
+  #lastComicWordIdx = -1;
+  /** Counter used to alternate the comic palette per spawn. */
+  #comicPaletteIdx = 0;
 
   /**
    * Singleton mutable shake-offset return value. See class jsdoc for the
@@ -212,6 +301,7 @@ export class EffectsRenderer {
       startedAtMs: nowMs,
       durationMs: MISS_SHAKE_DURATION_MS,
     });
+    this.#spawnComicBurst(lane, nowMs);
   }
 
   spawnComboPopup(combo: number, nowMs: number): void {
@@ -291,6 +381,7 @@ export class EffectsRenderer {
     this.#updateAndDrawParticles(ctx, dtSec, nowMs);
     this.#drawTapRings(ctx, nowMs);
     this.#drawMissFlashes(ctx, nowMs);
+    this.#drawComicBursts(ctx, nowMs);
     this.#drawComboPopups(ctx, nowMs);
     this.#drawStarPowerBanners(ctx, nowMs);
     ctx.restore();
@@ -307,6 +398,9 @@ export class EffectsRenderer {
     this.#shakeImpulses.length = 0;
     this.#comboPopups.length = 0;
     this.#starBanners.length = 0;
+    this.#comicBursts.length = 0;
+    this.#lastComicWordIdx = -1;
+    this.#comicPaletteIdx = 0;
     this.#lastDrawNowMs = -1;
     this.#shakeOffset.x = 0;
     this.#shakeOffset.y = 0;
@@ -592,9 +686,182 @@ export class EffectsRenderer {
     }
     banners.length = writeIdx;
   }
+
+  // ---- Comic miss burst --------------------------------------------------
+
+  /**
+   * Spawn a comic-style explosion burst over the failed lane. Push a fresh
+   * burst to the live array, picking a word that is not the immediate
+   * previous one and a palette that alternates per call.
+   *
+   * Position is biased **outward** of the lane edge (left for `L`, right for
+   * `R`) so the burst sits beside the note approach path rather than over
+   * it. Random X/Y jitter and tilt keep consecutive bursts from stacking
+   * identically.
+   */
+  #spawnComicBurst(lane: Lane, nowMs: number): void {
+    // Cap simultaneous live bursts so a long miss streak does not paint
+    // over the play area. Drop the oldest (front of the array).
+    while (this.#comicBursts.length >= COMIC_MAX_LIVE) {
+      this.#comicBursts.shift();
+    }
+
+    const word = pickComicWord(this.#lastComicWordIdx);
+    this.#lastComicWordIdx = word.idx;
+
+    const palette =
+      COMIC_PALETTES[this.#comicPaletteIdx % COMIC_PALETTES.length] ?? COMIC_FALLBACK_PALETTE;
+    this.#comicPaletteIdx++;
+
+    const outward = lane === 'L' ? -COMIC_LANE_OUTWARD_PX : COMIC_LANE_OUTWARD_PX;
+    const cx = laneCenterX(lane, 1) + outward + (Math.random() - 0.5) * 2 * COMIC_X_JITTER_PX;
+    const cy = COMIC_BASE_Y + (Math.random() - 0.5) * 2 * COMIC_Y_JITTER_PX;
+    const tiltRad = (Math.random() - 0.5) * 2 * COMIC_TILT_RANGE_RAD;
+
+    this.#comicBursts.push({
+      bornMs: nowMs,
+      cx,
+      cy,
+      word: word.text,
+      palette,
+      tiltRad,
+    });
+  }
+
+  /**
+   * Draw every live comic burst. Three layers per burst, all drawn inside
+   * one `save` / `restore` so transforms and styles never leak:
+   *   1. Outer jagged starburst (palette fill + black outline).
+   *   2. Inner highlight starburst (lighter fill, no outline).
+   *   3. The onomatopoeic word (white fill + chunky black stroke).
+   *
+   * `globalAlpha` is multiplied (not assigned) so a parent alpha — for
+   * example a router crossfade — composes correctly.
+   */
+  #drawComicBursts(ctx: CanvasRenderingContext2D, nowMs: number): void {
+    const bursts = this.#comicBursts;
+    if (bursts.length === 0) return;
+
+    let writeIdx = 0;
+    for (const burst of bursts) {
+      const age = nowMs - burst.bornMs;
+      if (age < 0 || age >= COMIC_TOTAL_MS) continue;
+
+      let scale: number;
+      let alpha: number;
+      let drift: number;
+      if (age < COMIC_POPIN_MS) {
+        // Pop-in: cubic ease-out scale 0 → 1.18, alpha ramp 0 → 1.
+        const t = age / COMIC_POPIN_MS;
+        const inv = 1 - t;
+        const eased = 1 - inv * inv * inv;
+        scale = 1.18 * eased;
+        alpha = t;
+        drift = 0;
+      } else if (age < COMIC_POPIN_MS + COMIC_SETTLE_MS) {
+        // Settle: scale 1.18 → 1.0, full alpha.
+        const t = (age - COMIC_POPIN_MS) / COMIC_SETTLE_MS;
+        scale = 1.18 - 0.18 * t;
+        alpha = 1;
+        drift = 0;
+      } else if (age < COMIC_POPIN_MS + COMIC_SETTLE_MS + COMIC_HOLD_MS) {
+        // Hold: tiny wobble, full alpha.
+        const tHold = (age - COMIC_POPIN_MS - COMIC_SETTLE_MS) / 1000;
+        scale = 1 + COMIC_WOBBLE_AMPLITUDE * Math.sin(2 * Math.PI * COMIC_WOBBLE_HZ * tHold);
+        alpha = 1;
+        drift = 0;
+      } else {
+        // Fade: alpha 1 → 0, gentle upward drift, slight scale-up.
+        const t = (age - COMIC_POPIN_MS - COMIC_SETTLE_MS - COMIC_HOLD_MS) / COMIC_FADE_MS;
+        scale = 1 + 0.04 * t;
+        alpha = 1 - t;
+        drift = COMIC_DRIFT_PX * t;
+      }
+
+      ctx.save();
+      const parentAlpha = ctx.globalAlpha;
+      ctx.globalAlpha = parentAlpha * alpha;
+      ctx.translate(burst.cx, burst.cy - drift);
+      ctx.rotate(burst.tiltRad);
+      ctx.scale(scale, scale);
+
+      // 1. Outer starburst (filled + outlined).
+      ctx.lineJoin = 'miter';
+      ctx.miterLimit = 6;
+      ctx.lineWidth = COMIC_OUTLINE_STROKE_PX;
+      ctx.strokeStyle = '#000000';
+      ctx.fillStyle = burst.palette.fill;
+      drawStarburstPath(ctx, COMIC_OUTER_R, COMIC_INNER_R, COMIC_SPIKES);
+      ctx.fill();
+      ctx.stroke();
+
+      // 2. Inner highlight starburst (no outline, lighter colour).
+      ctx.fillStyle = burst.palette.inner;
+      drawStarburstPath(ctx, COMIC_OUTER_R * 0.62, COMIC_INNER_R * 0.62, COMIC_SPIKES);
+      ctx.fill();
+
+      // 3. Onomatopoeic word.
+      ctx.font = `900 italic ${COMIC_FONT_PX}px "Arial Black", Impact, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineJoin = 'round';
+      ctx.lineWidth = COMIC_TEXT_STROKE_PX;
+      ctx.strokeStyle = '#000000';
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeText(burst.word, 0, 0);
+      ctx.fillText(burst.word, 0, 0);
+
+      ctx.restore();
+
+      bursts[writeIdx++] = burst;
+    }
+    bursts.length = writeIdx;
+  }
 }
 
 // ---- Helpers ---------------------------------------------------------------
+
+/**
+ * Pick a comic word at random, biased to never match `lastIdx` (so the same
+ * word does not appear back-to-back during a miss streak). Returns both the
+ * text and the chosen index so the caller can update its rolling state.
+ */
+function pickComicWord(lastIdx: number): { text: string; idx: number } {
+  const n = COMIC_WORDS.length;
+  if (n === 0) return { text: COMIC_FALLBACK_WORD, idx: -1 };
+  if (n === 1) return { text: COMIC_WORDS[0] ?? COMIC_FALLBACK_WORD, idx: 0 };
+
+  // Pick uniformly from the n-1 indices that are not lastIdx, by drawing
+  // from [0, n-1) and skipping past lastIdx if hit. No allocation.
+  const draw = Math.floor(Math.random() * (n - 1));
+  const idx = draw < lastIdx || lastIdx < 0 ? draw : draw + 1;
+  return { text: COMIC_WORDS[idx] ?? COMIC_FALLBACK_WORD, idx };
+}
+
+/**
+ * Trace a closed jagged starburst path centred at the current transform
+ * origin. `spikes` outer points alternate with `spikes` inner valleys for
+ * `2 * spikes` total vertices. Pure path construction — does not fill or
+ * stroke. Caller controls style and `fill()` / `stroke()` order.
+ */
+function drawStarburstPath(
+  ctx: CanvasRenderingContext2D,
+  outerR: number,
+  innerR: number,
+  spikes: number,
+): void {
+  const total = spikes * 2;
+  ctx.beginPath();
+  for (let i = 0; i < total; i++) {
+    const r = i % 2 === 0 ? outerR : innerR;
+    const a = (i * Math.PI) / spikes - Math.PI / 2;
+    const x = Math.cos(a) * r;
+    const y = Math.sin(a) * r;
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+}
 
 /**
  * Lane fill colour as a comma-separated `r,g,b` triplet, with a brightness
