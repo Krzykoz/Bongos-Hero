@@ -15,6 +15,7 @@
 
 import type { Lane } from '@bongos-hero/shared';
 
+import { darkenHex, lightenHex } from './color.js';
 import { subscribePalette, THEME } from './theme.js';
 
 export interface NoteSprite {
@@ -39,23 +40,10 @@ const HEAD_RIM_WIDTH = 2;
 /** Radius of the inner highlight ring (~80% of the head radius). */
 const HEAD_INNER_RING_RADIUS = HEAD_RADIUS * 0.8;
 
-// ---- Sustain trail sprite geometry -----------------------------------------
-//
-// The trail is drawn under (visually behind) a sustain note's drum head and
-// extends from the head's centre back to its `expectedEndMs` position on the
-// highway. We pre-rasterise it as a tall, narrow pill with a soft horizontal
-// gradient so the renderer can blit + scale a single bitmap per frame. Width
-// is constant (no perspective taper) — the renderer scales the whole sprite
-// uniformly to match the head's shrink with distance from the hit line.
-
-/** Width of the trail sprite in px (matches the head's vertical mid-band). */
-const TRAIL_WIDTH = 32;
-/** Height of the trail sprite source bitmap. The renderer stretches this to
- *  the actual screen length, so the source just needs enough vertical extent
- *  that the rounded caps remain crisp after stretching. */
-const TRAIL_HEIGHT = 128;
-/** Rounded-cap radius at the top and bottom of the trail. */
-const TRAIL_CAP_RADIUS = TRAIL_WIDTH / 2;
+// Sustain trails used to be pre-rasterised here too, but they need to follow
+// the highway's perspective (lane convergence + per-Y scale) rather than
+// being a uniformly-scaled pill, so they're now drawn as live paths in
+// `notes.ts`. No trail sprite remains in this module.
 
 // ---- Lib type compatibility ------------------------------------------------
 //
@@ -70,34 +58,8 @@ type AnyCtx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
 const laneSpriteCache = new Map<Lane, NoteSprite>();
 let spOverlayCache: NoteSprite | null = null;
-const trailSpriteCache = new Map<Lane, NoteSprite>();
 
 // ---- Helpers ----------------------------------------------------------------
-
-/**
- * Multiplicatively scale every channel of a `#rrggbb` colour toward black.
- * `factor < 1` darkens, `factor > 1` lightens (clamped at 255).
- */
-function darkenHex(hex: string, factor: number): string {
-  const r = Math.max(0, Math.min(255, Math.round(parseInt(hex.slice(1, 3), 16) * factor)));
-  const g = Math.max(0, Math.min(255, Math.round(parseInt(hex.slice(3, 5), 16) * factor)));
-  const b = Math.max(0, Math.min(255, Math.round(parseInt(hex.slice(5, 7), 16) * factor)));
-  return `rgb(${r},${g},${b})`;
-}
-
-/**
- * Linearly blend a `#rrggbb` colour toward white by `factor` in `[0, 1]`.
- * Used for the inner highlight ring on top of the drum head.
- */
-function lightenHex(hex: string, factor: number): string {
-  const r0 = parseInt(hex.slice(1, 3), 16);
-  const g0 = parseInt(hex.slice(3, 5), 16);
-  const b0 = parseInt(hex.slice(5, 7), 16);
-  const r = Math.round(r0 + (255 - r0) * factor);
-  const g = Math.round(g0 + (255 - g0) * factor);
-  const b = Math.round(b0 + (255 - b0) * factor);
-  return `rgb(${r},${g},${b})`;
-}
 
 /**
  * Allocate an offscreen drawing surface and run the supplied painter against
@@ -245,53 +207,6 @@ function paintSpOverlay(ctx: AnyCtx2D): void {
   ctx.fill();
 }
 
-/**
- * Paint the sustain-trail sprite for the given lane. A vertical pill with
- * rounded caps and a soft horizontal gradient (lane glow on the outer
- * edges, lane fill in the centre) so the trail reads as a glowing rope of
- * the lane colour. Drawn under the drum head; the renderer can additionally
- * overpaint with `globalCompositeOperation = 'lighter'` while the player is
- * holding to make the trail visibly brighten.
- */
-function paintTrailSprite(ctx: AnyCtx2D, lane: Lane): void {
-  const fill = lane === 'L' ? THEME.laneL.fill : THEME.laneR.fill;
-  const glow = lane === 'L' ? THEME.laneL.glow : THEME.laneR.glow;
-
-  // 1. Fill the rounded-rect body so the gradient + caps sit cleanly inside it.
-  ctx.beginPath();
-  // Top cap.
-  ctx.arc(TRAIL_WIDTH / 2, TRAIL_CAP_RADIUS, TRAIL_CAP_RADIUS, Math.PI, 0);
-  // Right edge → bottom-right cap.
-  ctx.lineTo(TRAIL_WIDTH, TRAIL_HEIGHT - TRAIL_CAP_RADIUS);
-  ctx.arc(TRAIL_WIDTH / 2, TRAIL_HEIGHT - TRAIL_CAP_RADIUS, TRAIL_CAP_RADIUS, 0, Math.PI);
-  // Left edge back to start.
-  ctx.closePath();
-
-  // 2. Lane-fill body with subtle vertical brightening toward the head end
-  //    (top of the source bitmap; the renderer flips/positions so the head
-  //    end sits at the hit-line side of the trail).
-  const body = ctx.createLinearGradient(0, 0, TRAIL_WIDTH, 0);
-  body.addColorStop(0, darkenHex(fill, 0.55));
-  body.addColorStop(0.5, fill);
-  body.addColorStop(1, darkenHex(fill, 0.55));
-  ctx.fillStyle = body;
-  ctx.fill();
-
-  // 3. Edge-glow halo: a wider radial-style gradient overlay along the
-  //    edges so the trail bleeds slightly outside its rounded-rect outline.
-  //    Composite on top with `lighter` to additively brighten.
-  ctx.save();
-  ctx.globalCompositeOperation = 'lighter';
-  const glowGrad = ctx.createLinearGradient(0, 0, TRAIL_WIDTH, 0);
-  glowGrad.addColorStop(0, glow);
-  glowGrad.addColorStop(0.2, 'rgba(0,0,0,0)');
-  glowGrad.addColorStop(0.8, 'rgba(0,0,0,0)');
-  glowGrad.addColorStop(1, glow);
-  ctx.fillStyle = glowGrad;
-  ctx.fillRect(0, 0, TRAIL_WIDTH, TRAIL_HEIGHT);
-  ctx.restore();
-}
-
 // ---- Public API -------------------------------------------------------------
 
 /** Returns a pre-rendered drumhead sprite for the given lane (cached). */
@@ -310,31 +225,15 @@ export function getSpOverlaySprite(): NoteSprite {
   return spOverlayCache;
 }
 
-/**
- * Returns a pre-rendered sustain-trail sprite for the given lane (cached).
- * The renderer blits this between the head's centre and the trail-end point
- * on the highway. Width is fixed; the renderer scales the sprite uniformly
- * to track the head's perspective shrink. Sustain holds in progress
- * brighten the trail by overdrawing it with `globalCompositeOperation =
- * 'lighter'`; the base sprite itself is the "not held" appearance.
- */
-export function getTrailSprite(lane: Lane): NoteSprite {
-  const cached = trailSpriteCache.get(lane);
-  if (cached) return cached;
-  const sprite = buildSprite((ctx) => paintTrailSprite(ctx, lane), TRAIL_WIDTH, TRAIL_HEIGHT);
-  trailSpriteCache.set(lane, sprite);
-  return sprite;
-}
-
 // When the active palette changes (color-blind toggle), every cached sprite
 // has the OLD lane colour baked into its bitmap. Drop the caches so the next
-// `getNoteSprite` / `getSpOverlaySprite` / `getTrailSprite` call lazily
-// rebuilds against the new palette. The first call (on subscribe) finds
-// empty caches and is a no-op. Note: `notes.ts` separately tracks the
-// palette epoch so its cached per-instance sprite handles also drop their
-// stale references.
+// `getNoteSprite` / `getSpOverlaySprite` call lazily rebuilds against the
+// new palette. The first call (on subscribe) finds empty caches and is a
+// no-op. Note: `notes.ts` separately tracks the palette epoch so its cached
+// per-instance sprite handles also drop their stale references; sustain
+// trails are path-painted live in the renderer and follow the same
+// `getPaletteEpoch()` polling pattern.
 subscribePalette(() => {
   laneSpriteCache.clear();
-  trailSpriteCache.clear();
   spOverlayCache = null;
 });
