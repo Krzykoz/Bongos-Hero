@@ -16,7 +16,7 @@
 
 import { STAGE_H, STAGE_W } from './geom.js';
 import { HudRenderer, type HudState } from './hud.js';
-import type { ScoringSnapshot } from '../game/scoring.js';
+import { defaultSnapshot, type ScoringSnapshot } from '../game/scoring.js';
 
 const SONG_DURATION_MS = 4 * 60 * 1000;
 
@@ -76,6 +76,7 @@ export function runHudDemo(canvas: HTMLCanvasElement): () => void {
     const pressedR = Math.floor(tSec * 2.3) % 3 === 0;
 
     const snapshot: ScoringSnapshot = {
+      ...defaultSnapshot(),
       score,
       combo,
       maxCombo: combo,
@@ -83,13 +84,8 @@ export function runHudDemo(canvas: HTMLCanvasElement): () => void {
       spMeter,
       spActive,
       spRemainingMs: spActive ? spMeter * 12_000 : 0,
-      hits: { perfect: 0, great: 0, good: 0, miss: 0 },
       consumed,
-      notesPlayed: 0,
-      notesTotal: 0,
       rockMeter: spMeter,
-      isFailed: false,
-      activeHolds: [],
     };
 
     const songTimeMs = elapsedMs % SONG_DURATION_MS;

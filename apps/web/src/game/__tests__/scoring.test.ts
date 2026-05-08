@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { ChartNote, ChartV1, Judgment } from '@bongos-hero/shared';
 
 import { prepareChart } from '../chart.js';
-import { ScoringEngine, type ScoringEvent } from '../scoring.js';
+import { defaultSnapshot, ScoringEngine, type ScoringEvent } from '../scoring.js';
 
 function singleNoteChart(lane: 'L' | 'R' = 'L', tMs = 1000, sp = false): ChartV1 {
   const note: ChartNote = { tMs, lane };
@@ -467,5 +467,65 @@ describe('ScoringEngine — sustain notes', () => {
     const a = engine.snapshot().activeHolds;
     const b = engine.snapshot().activeHolds;
     expect(a).toBe(b);
+  });
+});
+
+describe('defaultSnapshot', () => {
+  it('returns the canonical zero-state shape', () => {
+    const snap = defaultSnapshot();
+    expect(snap.score).toBe(0);
+    expect(snap.combo).toBe(0);
+    expect(snap.maxCombo).toBe(0);
+    expect(snap.multiplier).toBe(1);
+    expect(snap.spMeter).toBe(0);
+    expect(snap.spActive).toBe(false);
+    expect(snap.spRemainingMs).toBe(0);
+    expect(snap.hits).toEqual({ perfect: 0, great: 0, good: 0, miss: 0 });
+    expect(snap.consumed).toBeInstanceOf(Set);
+    expect(snap.consumed.size).toBe(0);
+    expect(snap.notesPlayed).toBe(0);
+    expect(snap.notesTotal).toBe(0);
+    expect(snap.rockMeter).toBe(0.5);
+    expect(snap.isFailed).toBe(false);
+    expect(snap.activeHolds).toEqual([]);
+  });
+
+  it('returns a fresh object each call (mutating one does not affect the next)', () => {
+    const a = defaultSnapshot();
+    (a.activeHolds as { lane: 'L' | 'R'; remainingMs: number }[]).push({
+      lane: 'L',
+      remainingMs: 999,
+    });
+    (a.consumed as Set<number>).add(7);
+    a.hits.perfect = 42;
+
+    const b = defaultSnapshot();
+    expect(b.activeHolds).toEqual([]);
+    expect(b.consumed.size).toBe(0);
+    expect(b.hits).toEqual({ perfect: 0, great: 0, good: 0, miss: 0 });
+  });
+
+  it('covers every key in ScoringSnapshot', () => {
+    const expected = [
+      'score',
+      'combo',
+      'maxCombo',
+      'multiplier',
+      'spMeter',
+      'spActive',
+      'spRemainingMs',
+      'hits',
+      'consumed',
+      'notesPlayed',
+      'notesTotal',
+      'rockMeter',
+      'isFailed',
+      'activeHolds',
+    ] as const;
+    const snap = defaultSnapshot();
+    for (const k of expected) {
+      expect(snap).toHaveProperty(k);
+    }
+    expect(Object.keys(snap).sort()).toEqual([...expected].sort());
   });
 });

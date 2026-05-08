@@ -44,6 +44,9 @@ interface RichFakeSource extends FakeSource {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
   onended: (() => void) | null;
+  loop: boolean;
+  loopStart: number;
+  loopEnd: number;
 }
 
 interface RichFakeCtx {
@@ -63,8 +66,8 @@ interface RichEnginePrivates {
   _startedAtCtxTime: number;
   _startedAtSongMs: number;
   _playbackRate: number;
-  _seekingUntilPerfMs: number;
-  _lastReportedSongMs: number;
+  _loopStartMs: number | null;
+  _loopEndMs: number | null;
 }
 
 function makeRichFakeSource(initial = 1): RichFakeSource {
@@ -81,6 +84,9 @@ function makeRichFakeSource(initial = 1): RichFakeSource {
     start: vi.fn(),
     stop: vi.fn(),
     onended: null,
+    loop: false,
+    loopStart: 0,
+    loopEnd: 0,
   };
 }
 
@@ -180,7 +186,7 @@ describe('AudioEngine.setPlaybackRate', () => {
 });
 
 describe('AudioEngine practice loop range', () => {
-  it('seeks back to startMs when the playing clock crosses endMs', () => {
+  it('sets native loop properties on the live source and reports wrapped song-time', () => {
     const { eng, ctx, source, privates } = setupPlayingEngine({
       durationMs: 60_000,
       // Source was started 30s ago of wall-clock time at song-time 0.
@@ -189,21 +195,23 @@ describe('AudioEngine practice loop range', () => {
       ctxNow: 30, // 30s wall-clock => song-time 30000ms at rate 1
     });
     eng.setLoopRange(10_000, 20_000);
-    // First read crosses the boundary and triggers a seek.
+    // Native loop properties applied to the live source — no tear-down,
+    // no fresh BufferSource. The Web Audio engine wraps the audio itself.
+    expect(source.loop).toBe(true);
+    expect(source.loopStart).toBe(10);
+    expect(source.loopEnd).toBe(20);
+    // currentTimeMs reconstructs the wrapped song-time from the wall clock.
+    // raw=30000, delta=20000, wraps=2, reported = 10000 + 0 = 10000.
     const t = eng.currentTimeMs();
-    // Engine reports the wrap-target song time.
     expect(t).toBe(10_000);
-    // Bookkeeping: a fresh source was created and started at the wrap point.
-    expect(ctx.createBufferSource).toHaveBeenCalledTimes(1);
-    expect(privates._source).not.toBe(source); // replaced
-    expect(privates._source?.start).toHaveBeenCalledWith(0, 10);
-    expect(source.stop).toHaveBeenCalledTimes(1);
-    // Anchor reset so subsequent reads return values relative to startMs.
+    expect(ctx.createBufferSource).not.toHaveBeenCalled();
+    expect(source.stop).not.toHaveBeenCalled();
+    // Anchor reset so subsequent reads stay bounded against the wall clock.
     expect(privates._startedAtSongMs).toBe(10_000);
     expect(privates._startedAtCtxTime).toBe(30);
   });
 
-  it('does not seek when the playing clock has not yet reached endMs', () => {
+  it('does not wrap when the playing clock has not yet reached endMs', () => {
     const { eng, ctx, source } = setupPlayingEngine({
       durationMs: 60_000,
       startedAtCtxTime: 0,
@@ -211,13 +219,18 @@ describe('AudioEngine practice loop range', () => {
       ctxNow: 15, // song-time 15000, still inside [10000, 20000]
     });
     eng.setLoopRange(10_000, 20_000);
+    // Properties still get pushed to the source so the audio loops natively
+    // when it eventually reaches the boundary.
+    expect(source.loop).toBe(true);
+    expect(source.loopStart).toBe(10);
+    expect(source.loopEnd).toBe(20);
     const t = eng.currentTimeMs();
     expect(t).toBe(15_000);
     expect(ctx.createBufferSource).not.toHaveBeenCalled();
     expect(source.stop).not.toHaveBeenCalled();
   });
 
-  it('clearLoopRange() stops the looping behavior', () => {
+  it('clearLoopRange() disables the native loop and stops wrap math', () => {
     const { eng, ctx, source } = setupPlayingEngine({
       durationMs: 60_000,
       startedAtCtxTime: 0,
@@ -225,14 +238,17 @@ describe('AudioEngine practice loop range', () => {
       ctxNow: 30, // would have wrapped if loop were still active
     });
     eng.setLoopRange(10_000, 20_000);
+    expect(source.loop).toBe(true);
     eng.clearLoopRange();
+    // The source plays through to end naturally — loop flag flipped off.
+    expect(source.loop).toBe(false);
     const t = eng.currentTimeMs();
     expect(t).toBe(30_000); // free-running clock, no wrap
     expect(ctx.createBufferSource).not.toHaveBeenCalled();
     expect(source.stop).not.toHaveBeenCalled();
   });
 
-  it('treats startMs >= endMs as a no-op (warns and does not loop)', () => {
+  it('treats startMs >= endMs as a no-op (warns and does not arm the loop)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     try {
       const { eng, ctx, source } = setupPlayingEngine({
@@ -245,6 +261,8 @@ describe('AudioEngine practice loop range', () => {
       eng.setLoopRange(15_000, 15_000);
       // Inverted bounds: also degenerate.
       eng.setLoopRange(20_000, 10_000);
+      // Neither call should have flipped the loop flag on the live source.
+      expect(source.loop).toBe(false);
       const t = eng.currentTimeMs();
       // Free-running, no wrap occurred.
       expect(t).toBe(30_000);
@@ -256,11 +274,11 @@ describe('AudioEngine practice loop range', () => {
     }
   });
 
-  it('respects playback rate when checking the loop boundary (rate < 1 delays the wrap)', () => {
-    // At rate 0.5, 30s of wall-clock = 15s of song-time. So even though the
-    // unscaled clock would have crossed endMs=12s, the rate-scaled clock is
-    // still inside the loop.
-    const { eng, ctx } = setupPlayingEngine({
+  it('respects playback rate when computing the wrap (rate < 1 delays it)', () => {
+    // At rate 0.5, 30s of wall-clock = 15s of song-time. Even though the
+    // unscaled clock would have crossed endMs=18s, the rate-scaled clock is
+    // still inside the loop and no wrap math runs.
+    const { eng, ctx, source } = setupPlayingEngine({
       durationMs: 60_000,
       startedAtCtxTime: 0,
       startedAtSongMs: 0,
@@ -268,13 +286,14 @@ describe('AudioEngine practice loop range', () => {
       playbackRate: 0.5,
     });
     eng.setLoopRange(5_000, 18_000);
+    expect(source.loop).toBe(true);
     const t = eng.currentTimeMs();
     expect(t).toBe(15_000); // 30s * 0.5 = 15s song-time, still < 18s endMs
     expect(ctx.createBufferSource).not.toHaveBeenCalled();
   });
 
   it('rejects non-finite loop bounds', () => {
-    const { eng, ctx } = setupPlayingEngine({
+    const { eng, ctx, source } = setupPlayingEngine({
       durationMs: 60_000,
       startedAtCtxTime: 0,
       startedAtSongMs: 0,
@@ -282,8 +301,49 @@ describe('AudioEngine practice loop range', () => {
     });
     eng.setLoopRange(Number.NaN, 20_000);
     eng.setLoopRange(10_000, Number.POSITIVE_INFINITY);
-    // Neither call should have installed a loop range; clock is free-running.
+    // Neither call should have armed the loop.
+    expect(source.loop).toBe(false);
     expect(eng.currentTimeMs()).toBe(30_000);
     expect(ctx.createBufferSource).not.toHaveBeenCalled();
+  });
+
+  it('reports a song-time inside [startMs, endMs) after a native wrap', () => {
+    // raw=35000, delta=25000, loopLength=10000, wraps=2, reported=15000.
+    const { eng } = setupPlayingEngine({
+      durationMs: 60_000,
+      startedAtCtxTime: 0,
+      startedAtSongMs: 0,
+      ctxNow: 35,
+    });
+    eng.setLoopRange(10_000, 20_000);
+    const t = eng.currentTimeMs();
+    expect(t).toBeGreaterThanOrEqual(10_000);
+    expect(t).toBeLessThan(20_000);
+    expect(t).toBe(15_000);
+  });
+
+  it('applies a stored loop range to the next source when set before playback starts', async () => {
+    // Engine is not yet playing; setLoopRange should stash the bounds so
+    // they're applied when _createAndStartSource fires from play().
+    const eng = new AudioEngine();
+    const buffer = { duration: 60 } as unknown as AudioBuffer;
+    const ctx = makeRichFakeCtx(0);
+    const privates = eng as unknown as RichEnginePrivates;
+    privates._ctx = ctx;
+    privates._buffer = buffer;
+    privates._master = null;
+    privates._state = 'ready';
+
+    eng.setLoopRange(10_000, 20_000);
+    expect(privates._source).toBeNull();
+
+    await eng.play(0);
+
+    const newSource = privates._source;
+    expect(newSource).not.toBeNull();
+    expect(newSource?.loop).toBe(true);
+    expect(newSource?.loopStart).toBe(10);
+    expect(newSource?.loopEnd).toBe(20);
+    expect(ctx.createBufferSource).toHaveBeenCalledTimes(1);
   });
 });

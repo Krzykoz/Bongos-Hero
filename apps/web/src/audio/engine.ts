@@ -63,19 +63,15 @@ export class AudioEngine {
    */
   private _playbackRate = 1;
 
-  /** Active practice-loop range; `null` disables looping. */
-  private _loopRange: { startMs: number; endMs: number } | null = null;
   /**
-   * Wall-clock ms until which `currentTimeMs()` should return the
-   * pre-seek song time instead of recomputing. Set briefly after a
-   * loop-triggered seek so external callers don't see a one-frame backwards
-   * jump while the new BufferSource is still ramping up to producing
-   * samples. The seek itself is synchronous in terms of bookkeeping so the
-   * window is small (~10ms wall-clock); we err on the safe side here.
+   * Active practice-loop range, in song-time ms. `null` on either bound
+   * disables looping. Both must be set together; we keep them as separate
+   * fields so the loop properties on the live `AudioBufferSourceNode`
+   * (set on `setLoopRange` and reapplied on every `_createAndStartSource`)
+   * have a single canonical source of truth on the engine.
    */
-  private _seekingUntilPerfMs = 0;
-  /** Last raw song-time reported by `currentTimeMs()`, used during the seek window. */
-  private _lastReportedSongMs = 0;
+  private _loopStartMs: number | null = null;
+  private _loopEndMs: number | null = null;
 
   private _audioOffsetMs: number;
 
@@ -255,7 +251,6 @@ export class AudioEngine {
     }
     if (raw < 0) raw = 0;
     if (dur > 0 && raw > dur) raw = dur;
-    this._lastReportedSongMs = raw;
     return raw + this._audioOffsetMs;
   }
 
@@ -341,13 +336,19 @@ export class AudioEngine {
   }
 
   /**
-   * Set a song-time loop range. While playing, once `currentTimeMs()`
-   * reaches `endMs` the engine seeks back to `startMs` automatically.
-   * Both values are in song time (ms) and are independent of the current
-   * playback rate (the boundary is in song time, not wall-clock time).
+   * Set a song-time loop range. The active `AudioBufferSourceNode` (if any)
+   * is configured for native looping via `loop = true` + `loopStart` +
+   * `loopEnd`, so the audio wraps without the per-wrap click of tearing the
+   * source down. The clock in `currentTimeMs()` reconstructs the wrapped
+   * song-time from the wall clock since `AudioContext.currentTime` keeps
+   * monotonically increasing across native loops.
    *
-   * `startMs >= endMs` is rejected (no-op + console warning) — a zero or
-   * negative range would loop infinitely on the very next frame.
+   * If no source is currently playing the bounds are stored on the engine
+   * and applied to the next `_createAndStartSource()` call.
+   *
+   * `startMs >= endMs` and non-finite bounds are rejected (no-op + console
+   * warning) — a zero or negative range would loop infinitely on the very
+   * next frame, and NaN/Infinity would corrupt the clock math.
    */
   setLoopRange(startMs: number, endMs: number): void {
     if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return;
@@ -357,12 +358,23 @@ export class AudioEngine {
       );
       return;
     }
-    this._loopRange = { startMs: Math.max(0, startMs), endMs };
+    const start = Math.max(0, startMs);
+    this._loopStartMs = start;
+    this._loopEndMs = endMs;
+    if (this._source) {
+      this._source.loop = true;
+      this._source.loopStart = start / 1000;
+      this._source.loopEnd = endMs / 1000;
+    }
   }
 
-  /** Disable the practice-mode loop, if any. */
+  /** Disable the practice-mode loop, if any. The active source plays through naturally. */
   clearLoopRange(): void {
-    this._loopRange = null;
+    this._loopStartMs = null;
+    this._loopEndMs = null;
+    if (this._source) {
+      this._source.loop = false;
+    }
   }
 
   // ---- internals ----
@@ -400,37 +412,36 @@ export class AudioEngine {
   }
 
   /**
-   * If a practice loop is active and we've crossed `endMs`, restart the
-   * source at `startMs`. Returns the song-time the engine should report
-   * for this `currentTimeMs()` call (which is `startMs` after a wrap, the
-   * frozen pre-seek value during the very brief seek window, or the raw
-   * computed time otherwise).
+   * If a practice loop is active and the wall-clock-derived song time has
+   * crossed `endMs`, fold it back into `[startMs, endMs)` and re-anchor the
+   * clock so subsequent reads stay numerically bounded across many wraps.
+   *
+   * The native `AudioBufferSourceNode` loop wraps the audio inaudibly, but
+   * `AudioContext.currentTime` keeps monotonically increasing, so this
+   * modulo step is what keeps the reported song time in sync with what the
+   * player hears. Returns the song-time the engine should report.
    *
    * Only called from the 'playing' branch of `currentTimeMs()`.
    */
   private _maybeLoop(rawSongMs: number): number {
-    const loop = this._loopRange;
-    if (!loop) return rawSongMs;
-    const nowPerf =
-      typeof performance !== 'undefined' && typeof performance.now === 'function'
-        ? performance.now()
-        : 0;
-    if (nowPerf < this._seekingUntilPerfMs) {
-      // Still inside the recently-seeked stability window — return the
-      // pre-seek value so callers don't see a one-frame backwards blip.
-      return this._lastReportedSongMs;
+    const startMs = this._loopStartMs;
+    const endMs = this._loopEndMs;
+    if (startMs === null || endMs === null) return rawSongMs;
+    if (rawSongMs < endMs) return rawSongMs;
+
+    const loopLengthMs = endMs - startMs;
+    const delta = rawSongMs - startMs;
+    const wraps = Math.floor(delta / loopLengthMs);
+    const reportedSongMs = startMs + (delta - wraps * loopLengthMs);
+
+    // Re-anchor so `_computeSongMsRaw()` keeps producing values close to
+    // the loop range on subsequent calls, rather than letting the wall-clock
+    // delta grow unbounded across hours of practice.
+    if (this._ctx) {
+      this._startedAtCtxTime = this._ctx.currentTime;
+      this._startedAtSongMs = reportedSongMs;
     }
-    if (rawSongMs < loop.endMs) return rawSongMs;
-    // Wrap. Tear down + rebuild the source at startMs.
-    this._stopSourceInternal();
-    this._createAndStartSource(loop.startMs);
-    // Establish a small wall-clock window during which `currentTimeMs()`
-    // returns the freshly-anchored startMs without re-deriving from
-    // `ctx.currentTime`. The bookkeeping is correct, but a paranoid
-    // belt-and-braces guard against a one-frame regression where ctx
-    // hasn't yet ticked but performance.now() races ahead is cheap.
-    this._seekingUntilPerfMs = nowPerf + 10;
-    return loop.startMs;
+    return reportedSongMs;
   }
 
   private _createAndStartSource(songMs: number): void {
@@ -439,12 +450,19 @@ export class AudioEngine {
     const src = ctx.createBufferSource();
     src.buffer = this._buffer;
     // Preserve the active practice / slo-mo rate across source rebuilds
-    // (seek, resume, loop wrap). Without this, every restart would silently
-    // jump the rate back to 1.0x.
+    // (seek, resume). Without this, every restart would silently jump the
+    // rate back to 1.0x.
     src.playbackRate.value = this._playbackRate;
     // Route through the master gain so setMasterVolume + the settings
     // subscription actually attenuate the song.
     src.connect(this._master ?? ctx.destination);
+    // Apply practice-loop bounds if set before this source existed (e.g.
+    // setLoopRange was called from the practice scene before play()).
+    if (this._loopStartMs !== null && this._loopEndMs !== null) {
+      src.loop = true;
+      src.loopStart = this._loopStartMs / 1000;
+      src.loopEnd = this._loopEndMs / 1000;
+    }
 
     const myToken = ++this._sourceToken;
     src.onended = (): void => {

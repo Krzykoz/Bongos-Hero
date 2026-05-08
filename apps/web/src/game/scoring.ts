@@ -110,6 +110,35 @@ export interface ScoringSnapshot {
   activeHolds: readonly { readonly lane: Lane; readonly remainingMs: number }[];
 }
 
+/**
+ * Returns a fresh, all-defaults `ScoringSnapshot`. Used by:
+ * - the HUD demo to render a "no game in progress" state, and
+ * - tests that need a baseline snapshot to spread overrides onto.
+ *
+ * Numeric fields are 0 except `rockMeter` (0.5 = neutral starting bar) and
+ * `multiplier` (1× — the combo table's lowest tier). All collection fields
+ * are constructed fresh on each call so callers may safely mutate the
+ * result; this helper is **not** in the per-frame draw path.
+ */
+export function defaultSnapshot(): ScoringSnapshot {
+  return {
+    score: 0,
+    combo: 0,
+    maxCombo: 0,
+    multiplier: 1,
+    spMeter: 0,
+    spActive: false,
+    spRemainingMs: 0,
+    hits: { perfect: 0, great: 0, good: 0, miss: 0 },
+    consumed: new Set<number>(),
+    notesPlayed: 0,
+    notesTotal: 0,
+    rockMeter: ROCK_METER_START,
+    isFailed: false,
+    activeHolds: [],
+  };
+}
+
 export interface ScoringEvent {
   type:
     | 'judgment'
