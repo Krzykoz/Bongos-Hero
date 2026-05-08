@@ -29,7 +29,7 @@
 
 import type { Lane } from '@bongos-hero/shared';
 
-import { DEFAULTS, subscribe, type KeyBindings } from '../settings/index.js';
+import { DEFAULTS, register, type KeyBindings } from '../settings/index.js';
 
 const _leftKeys = new Set<string>();
 const _rightKeys = new Set<string>();
@@ -54,10 +54,12 @@ function rebuildSets(keys: KeyBindings): void {
   }
 }
 
-// Subscribe at module init. `subscribe` invokes synchronously with the
-// current settings, so by the time this call returns the Sets are populated.
-subscribe((s) => {
-  rebuildSets(s.keys);
+// Register a per-key applier at module init. `register('keys', ...)` invokes
+// the applier synchronously with the current bindings, so by the time this
+// call returns the Sets are populated. Volume / colorBlind / etc. changes
+// no longer wake this path up — only an actual rebind triggers a rebuild.
+register('keys', (keys) => {
+  rebuildSets(keys);
 });
 
 export function laneForCode(code: string): Lane | null {

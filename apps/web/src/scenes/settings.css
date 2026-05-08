@@ -72,6 +72,11 @@
   color: rgba(245, 240, 227, 0.75);
 }
 
+.bh-set-label-with-help {
+  display: inline-flex;
+  align-items: center;
+}
+
 .bh-set-readout {
   font:
     700 16px/1.1 'Courier New',
@@ -203,6 +208,89 @@
 .bh-set-row-keys {
   cursor: default;
   gap: 10px;
+}
+
+/* ----- Per-row help tooltips -------------------------------------------------
+ * Each settings row gets a `?` button that reveals an absolutely-positioned
+ * tooltip on hover OR keyboard focus. The tooltip lives inside `.bh-set-help-
+ * wrap` (a positioning ancestor) so it can anchor to the button without any
+ * runtime layout math.
+ */
+
+.bh-set-help-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+}
+
+.bh-set-row-help {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid #5a2d77;
+  background: rgba(196, 121, 255, 0.12);
+  color: rgba(245, 240, 227, 0.85);
+  font:
+    700 11px/1 'Segoe UI',
+    system-ui,
+    sans-serif;
+  cursor: help;
+  display: inline-grid;
+  place-items: center;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.bh-set-row-help:hover,
+.bh-set-row-help:focus-visible {
+  color: #fff;
+  border-color: #c479ff;
+  background: rgba(196, 121, 255, 0.28);
+  outline: none;
+}
+
+.bh-set-row-help:focus-visible {
+  box-shadow: 0 0 0 2px rgba(196, 121, 255, 0.55);
+}
+
+.bh-set-tooltip {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 240px;
+  padding: 8px 10px;
+  background: #1a0d2e;
+  border: 1px solid #5a2d77;
+  border-radius: 8px;
+  color: #f5f0e3;
+  font:
+    500 12px/1.4 'Segoe UI',
+    system-ui,
+    sans-serif;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  text-align: left;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 120ms ease,
+    visibility 120ms ease;
+  z-index: 10;
+}
+
+.bh-set-help-wrap:hover .bh-set-tooltip,
+.bh-set-help-wrap:focus-within .bh-set-tooltip {
+  opacity: 1;
+  visibility: visible;
 }
 
 .bh-set-key-chips {

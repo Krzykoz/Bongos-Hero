@@ -27,6 +27,12 @@ interface RechartBody {
   rmsFloor?: unknown;
   minSpacingMs?: unknown;
   centroidThreshold?: unknown;
+  /**
+   * When true, build the chart and return it WITHOUT persisting it to disk.
+   * Used by the re-chart UI to preview tunable changes before committing.
+   * Defaults to false (legacy behavior: always persist).
+   */
+  preview?: unknown;
 }
 
 interface RechartResponse {
@@ -107,9 +113,11 @@ export async function registerRoutes(app: FastifyInstance, jobs: JobsManager): P
   });
 
   // Re-run the chart pipeline on an already-imported song's cached audio
-  // with adjustable tunables and persist the result over the existing
-  // chart.json. Re-derives onsets + features from audio.ogg on every call —
-  // we don't persist the FeatureSet, and the audio file IS our cache.
+  // with adjustable tunables. By default the result is persisted over the
+  // existing chart.json; pass `preview: true` to receive the built chart
+  // WITHOUT touching the persisted copy (used by the re-chart UI's mini
+  // timeline preview). Re-derives onsets + features from audio.ogg on every
+  // call — we don't persist the FeatureSet, and the audio file IS our cache.
   app.post('/api/rechart', async (req: FastifyRequest, reply: FastifyReply) => {
     const body = (req.body ?? {}) as RechartBody;
     const songId = body.songId;
@@ -128,6 +136,8 @@ export async function registerRoutes(app: FastifyInstance, jobs: JobsManager): P
     if (isFiniteNumber(body.minSpacingMs)) tunables.minSpacingMs = body.minSpacingMs;
     if (isFiniteNumber(body.centroidThreshold)) tunables.centroidThreshold = body.centroidThreshold;
 
+    const preview = body.preview === true;
+
     let chart: ChartV1;
     try {
       const onsets = await detectOnsets({ audioPath: audioFile });
@@ -136,7 +146,9 @@ export async function registerRoutes(app: FastifyInstance, jobs: JobsManager): P
         onsetsSec: onsets.timesSec,
       });
       chart = buildChart({ features }, tunables);
-      await writeFile(chartPath(songId), `${JSON.stringify(chart, null, 2)}\n`, 'utf8');
+      if (!preview) {
+        await writeFile(chartPath(songId), `${JSON.stringify(chart, null, 2)}\n`, 'utf8');
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       req.log.error({ err, songId }, 'rechart failed');

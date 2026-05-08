@@ -5,9 +5,14 @@
  * multiplier, a checkbox for the color-blind palette, and a Key Bindings
  * editor for the left + right bongo lists. Every control's `input`/`click`
  * event calls `saveSettings({...})`, which persists to localStorage AND
- * notifies the audio engines + input layer via their settings subscriptions —
+ * notifies the audio engines + input layer via their settings registrations —
  * so volume sliders attenuate playback live and key rebinds take effect on
  * the next press without `play.ts` needing to know about it.
+ *
+ * Each row carries a `?` help button (`buildHelp`) that reveals a small
+ * absolutely-positioned tooltip on hover OR keyboard focus, sourced from the
+ * `TOOLTIPS` map below. The tooltip is wired with `aria-describedby` so screen
+ * readers announce the explanation alongside the control.
  *
  * Esc returns to the title screen — except while a key-capture is in
  * progress, in which case Esc cancels the capture instead.
@@ -61,6 +66,26 @@ const SLIDERS: readonly SliderSpec[] = [
   },
 ];
 
+/**
+ * Hover/focus help text for every settings field. Keyed by `Settings` key so
+ * adding a field forces an explanation here at compile time. Some entries
+ * (e.g. `tutorialSeen`) describe internal flags that aren't surfaced as a
+ * row in the current UI but are kept here for completeness — handy if a
+ * future row exposes them.
+ */
+const TOOLTIPS: Record<keyof Settings, string> = {
+  musicVolume: 'Music track volume. Applies live; affects the song mix only.',
+  sfxVolume: 'Volume of bongo hit sounds, miss banners, and combo SFX.',
+  scrollSpeedMul:
+    'How fast notes travel down the highway. Higher = more reaction time per note (notes appear earlier).',
+  colorBlind: 'Switch lane colors to a high-contrast, color-blind-friendly palette.',
+  keys: 'Click "+ Add Key", then press a key to bind it to that bongo. Use × to remove a binding. At least one key must remain per side.',
+  tutorialSeen:
+    '(Internal) Marked true after completing the first-run tutorial. Replay anytime via the T hotkey on the title screen.',
+  audioReactiveEnabled:
+    "Pulse the highway edges with the song's low-frequency (kick/bass) energy. Disable for a flat, distraction-free highway.",
+};
+
 let root: HTMLDivElement | null = null;
 let onKeyDown: ((ev: KeyboardEvent) => void) | null = null;
 let captureCancel: (() => void) | null = null;
@@ -92,11 +117,50 @@ function clamp(min: number, max: number, v: number): number {
   return v;
 }
 
+let helpIdSeq = 0;
+
+/**
+ * Build a `?` help icon + paired tooltip for a settings field. The button is
+ * keyboard-focusable (Tab) and reveals the tooltip via :hover OR :focus-within
+ * on the wrapping span; aria-describedby links the two for screen readers.
+ *
+ * `type: 'button'` + `stopPropagation` on click prevents the parent <label>
+ * from forwarding the click to its bound input (which would otherwise toggle
+ * the checkbox / nudge the slider when the player just wants the explanation).
+ */
+function buildHelp(key: keyof Settings): HTMLElement {
+  const text = TOOLTIPS[key];
+  const tooltipId = `bh-set-tooltip-${key}-${++helpIdSeq}`;
+  const tip = el('span', { className: 'bh-set-tooltip', id: tooltipId }, [text]);
+  tip.setAttribute('role', 'tooltip');
+  const button = el(
+    'button',
+    {
+      type: 'button',
+      className: 'bh-set-row-help',
+    },
+    ['?'],
+  );
+  button.setAttribute('aria-describedby', tooltipId);
+  button.setAttribute('aria-label', `Help: ${text}`);
+  button.addEventListener('click', (ev) => {
+    // Don't let the parent <label> route this click into its bound input.
+    ev.preventDefault();
+    ev.stopPropagation();
+  });
+  return el('span', { className: 'bh-set-help-wrap' }, [button, tip]);
+}
+
+function buildLabelWithHelp(label: string, key: keyof Settings): HTMLElement {
+  const labelText = el('span', { className: 'bh-set-label-text' }, [label]);
+  return el('span', { className: 'bh-set-label-with-help' }, [labelText, buildHelp(key)]);
+}
+
 function buildSliderRow(spec: SliderSpec, initial: Settings): HTMLDivElement {
   const value = initial[spec.key];
   const readout = el('span', { className: 'bh-set-readout' }, [spec.format(value)]);
-  const labelText = el('span', { className: 'bh-set-label-text' }, [spec.label]);
-  const header = el('div', { className: 'bh-set-row-header' }, [labelText, readout]);
+  const labelWithHelp = buildLabelWithHelp(spec.label, spec.key);
+  const header = el('div', { className: 'bh-set-row-header' }, [labelWithHelp, readout]);
 
   const input = el('input', {
     type: 'range',
@@ -126,12 +190,12 @@ function buildColorBlindRow(initial: Settings): HTMLDivElement {
     className: 'bh-set-checkbox',
     checked: initial.colorBlind,
   });
-  const labelText = el('span', { className: 'bh-set-label-text' }, ['Color-Blind Palette']);
+  const labelWithHelp = buildLabelWithHelp('Color-Blind Palette', 'colorBlind');
   checkbox.addEventListener('input', () => {
     saveSettings({ colorBlind: checkbox.checked });
   });
   return el('label', { className: 'bh-set-row bh-set-row-toggle' }, [
-    labelText,
+    labelWithHelp,
     checkbox,
   ]) as unknown as HTMLDivElement;
 }
@@ -165,7 +229,7 @@ function endCapture(): void {
 function buildKeyBindingRow(side: 'left' | 'right'): HTMLDivElement {
   const sideLabel = side === 'left' ? 'Left Bongo' : 'Right Bongo';
 
-  const labelText = el('span', { className: 'bh-set-label-text' }, [sideLabel]);
+  const labelWithHelp = buildLabelWithHelp(sideLabel, 'keys');
   const resetBtn = el(
     'button',
     {
@@ -182,7 +246,7 @@ function buildKeyBindingRow(side: 'left' | 'right'): HTMLDivElement {
     saveSettings({ keys: { ...current, [side]: fresh } });
   });
 
-  const header = el('div', { className: 'bh-set-row-header' }, [labelText, resetBtn]);
+  const header = el('div', { className: 'bh-set-row-header' }, [labelWithHelp, resetBtn]);
 
   const chips = el('div', { className: 'bh-set-key-chips' });
   const addBtn = el(

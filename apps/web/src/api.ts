@@ -104,6 +104,40 @@ export async function deleteSong(id: string): Promise<void> {
   });
 }
 
+export interface RechartTunables {
+  rmsFloor?: number;
+  minSpacingMs?: number;
+  centroidThreshold?: number;
+}
+
+export interface RechartOptions extends RechartTunables {
+  /**
+   * When true, the server builds the chart and returns it WITHOUT persisting
+   * it over the existing chart.json. Used by the re-chart UI to render a
+   * mini-timeline preview before the user commits.
+   */
+  preview?: boolean;
+}
+
+/**
+ * Re-run the chart pipeline on an already-imported song with adjustable
+ * tunables. By default (`preview` falsy) the result is persisted; pass
+ * `preview: true` to receive the built chart without touching the on-disk
+ * `chart.json`.
+ */
+export async function rechartSong(id: string, opts: RechartOptions = {}): Promise<ChartV1> {
+  const body: Record<string, unknown> = { songId: id };
+  if (typeof opts.rmsFloor === 'number') body.rmsFloor = opts.rmsFloor;
+  if (typeof opts.minSpacingMs === 'number') body.minSpacingMs = opts.minSpacingMs;
+  if (typeof opts.centroidThreshold === 'number') body.centroidThreshold = opts.centroidThreshold;
+  if (opts.preview === true) body.preview = true;
+  const res = await request<{ chart: ChartV1 }>('/api/rechart', {
+    method: 'POST',
+    jsonBody: body,
+  });
+  return res.chart;
+}
+
 export function songAudioUrl(id: string): string {
   return `/api/songs/${encodeURIComponent(id)}/audio`;
 }

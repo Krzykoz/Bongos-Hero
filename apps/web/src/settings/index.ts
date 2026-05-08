@@ -2,11 +2,21 @@
  * Player-facing settings: volumes, scroll-speed multiplier, color-blind palette,
  * customizable bongo key bindings.
  *
- * State lives in a single in-memory `Settings` object plus a `Set` of
- * subscribers. `saveSettings` is the only mutator; it merges, persists to
- * localStorage, and notifies. `subscribe` invokes the callback synchronously
- * with the current settings on subscribe so callers can use the same code
- * path for "apply once now" and "apply on every change".
+ * State lives in a single in-memory `Settings` object plus two notification
+ * channels:
+ *   - `subscribe(cb)` — full-snapshot callback, fires on every save (back-compat
+ *     for consumers like the settings UI panel that re-render the whole thing
+ *     regardless of which field changed).
+ *   - `register(key, applier)` — per-key applier, fires only when that field's
+ *     value actually changes (and once at registration time with the current
+ *     value). Prefer this for consumers that only care about one field — it
+ *     skips a diff in every consumer and avoids spurious work when unrelated
+ *     settings move.
+ *
+ * `saveSettings` is the only mutator; it merges, persists to localStorage,
+ * dispatches per-key appliers for changed fields, then dispatches all
+ * full-snapshot subscribers. Both invocations are synchronous so callers can
+ * rely on "save → consumers updated" within a single turn of the event loop.
  *
  * Every numeric field is clamped to its declared range on both load and save;
  * every `localStorage` access is wrapped in try/catch (private-mode safety).
@@ -45,6 +55,13 @@ export interface Settings {
    * `T` hotkey on the title.
    */
   tutorialSeen: boolean;
+  /**
+   * When true, the renderer applies an FFT-driven edge glow on the highway
+   * that pulses with the song's low-frequency (kick/bass) energy, sourced
+   * from `AudioEngine.getLowBandEnergy()`. When false, both the analyser
+   * sample and the edge-glow draw are skipped, so the cost is exactly zero.
+   */
+  audioReactiveEnabled: boolean;
 }
 
 /**
@@ -115,6 +132,7 @@ export const DEFAULTS: Readonly<Settings> = Object.freeze({
     right: DEFAULT_RIGHT_KEYS as string[],
   }),
   tutorialSeen: false,
+  audioReactiveEnabled: true,
 });
 
 const STORAGE_KEY = 'bongos.settings';
@@ -169,6 +187,7 @@ function cloneSettings(s: Settings): Settings {
     colorBlind: s.colorBlind,
     keys: { left: [...s.keys.left], right: [...s.keys.right] },
     tutorialSeen: s.tutorialSeen,
+    audioReactiveEnabled: s.audioReactiveEnabled,
   };
 }
 
@@ -182,6 +201,9 @@ function normalize(partial: Partial<Settings>, base: Settings): Settings {
   if ('colorBlind' in partial) next.colorBlind = Boolean(partial.colorBlind);
   if ('keys' in partial) next.keys = normalizeKeys(partial.keys);
   if ('tutorialSeen' in partial) next.tutorialSeen = Boolean(partial.tutorialSeen);
+  if ('audioReactiveEnabled' in partial) {
+    next.audioReactiveEnabled = Boolean(partial.audioReactiveEnabled);
+  }
   return next;
 }
 
@@ -189,6 +211,76 @@ let current: Settings = cloneSettings(DEFAULTS);
 let hydrated = false;
 
 const subscribers = new Set<(s: Settings) => void>();
+
+/**
+ * Per-key applier registry. Each entry maps a `Settings` key to the set of
+ * functions that should run whenever that field's value changes. Stored as
+ * `unknown` internally because the Map can't preserve the per-key value
+ * type — the public `register()` signature reasserts the type at the
+ * registration boundary, and dispatch always passes the field's actual
+ * runtime value.
+ */
+type AnyApplier = (value: unknown) => void;
+const appliers = new Map<keyof Settings, Set<AnyApplier>>();
+
+/**
+ * Canonical iteration order over `Settings` keys. Used by the diff loop in
+ * `saveSettings` so adding a field is a one-line change here plus the usual
+ * spots in `cloneSettings`/`normalize`.
+ */
+const SETTINGS_KEYS: readonly (keyof Settings)[] = [
+  'musicVolume',
+  'sfxVolume',
+  'scrollSpeedMul',
+  'colorBlind',
+  'keys',
+  'tutorialSeen',
+  'audioReactiveEnabled',
+];
+
+function arraysEqual(a: readonly string[], b: readonly string[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function settingsValueEqual<K extends keyof Settings>(
+  key: K,
+  a: Settings[K],
+  b: Settings[K],
+): boolean {
+  if (key === 'keys') {
+    const ak = a as KeyBindings;
+    const bk = b as KeyBindings;
+    return arraysEqual(ak.left, bk.left) && arraysEqual(ak.right, bk.right);
+  }
+  return a === b;
+}
+
+/**
+ * Defensive clone for an individual setting value. Primitives pass through;
+ * `keys` (the only nested-object field) gets a deep-ish clone so an applier
+ * that mutates the value it receives can't corrupt the live store.
+ */
+function cloneValue<K extends keyof Settings>(key: K, value: Settings[K]): Settings[K] {
+  if (key === 'keys') {
+    const k = value as KeyBindings;
+    return { left: [...k.left], right: [...k.right] } as Settings[K];
+  }
+  return value;
+}
+
+function getApplierSet(key: keyof Settings): Set<AnyApplier> {
+  let set = appliers.get(key);
+  if (!set) {
+    set = new Set<AnyApplier>();
+    appliers.set(key, set);
+  }
+  return set;
+}
 
 function readFromStorage(): Settings {
   let raw: string | null = null;
@@ -229,19 +321,41 @@ export function loadSettings(): Settings {
 }
 
 /**
- * Merge `partial` into the current settings, persist to localStorage, and
- * notify every subscriber synchronously. Returns the post-merge full settings.
+ * Merge `partial` into the current settings, persist to localStorage, then
+ * dispatch (1) per-key appliers for fields whose value actually changed and
+ * (2) every full-snapshot subscriber. Returns the post-merge full settings.
  */
 export function saveSettings(partial: Partial<Settings>): Settings {
   ensureHydrated();
-  const next = normalize(partial, current);
+  // `normalize` clones `current` internally, so `prev` keeps pointing at the
+  // pre-merge object and is safe to diff against `next`.
+  const prev = current;
+  const next = normalize(partial, prev);
   current = next;
   writeToStorage(next);
-  // Iterate a snapshot so a callback that calls subscribe()/unsubscribe()
-  // mid-iteration cannot mutate the live Set we're walking.
-  const snapshot = Array.from(subscribers);
+
+  // (1) Per-key appliers — fire only for fields whose value actually moved.
+  for (const key of SETTINGS_KEYS) {
+    if (settingsValueEqual(key, prev[key], next[key])) continue;
+    const set = appliers.get(key);
+    if (!set || set.size === 0) continue;
+    // Snapshot the applier list so a callback that re-registers / unregisters
+    // mid-iteration cannot mutate the live Set we're walking.
+    const snapshot = Array.from(set);
+    const cloned = cloneValue(key, next[key]);
+    for (const fn of snapshot) {
+      try {
+        fn(cloned);
+      } catch (err) {
+        console.error(`[settings] applier for "${String(key)}" threw:`, err);
+      }
+    }
+  }
+
+  // (2) Full-snapshot subscribers — fire on any change (back-compat).
+  const subSnapshot = Array.from(subscribers);
   const view: Settings = cloneSettings(next);
-  for (const cb of snapshot) {
+  for (const cb of subSnapshot) {
     try {
       cb(view);
     } catch (err) {
@@ -255,6 +369,10 @@ export function saveSettings(partial: Partial<Settings>): Settings {
  * Subscribe to settings changes. The callback is invoked SYNCHRONOUSLY with
  * the current settings on subscribe (so callers can use the same code path
  * for "apply once" + "apply on change"). Returns an unsubscribe function.
+ *
+ * Prefer `register()` if you only care about one specific field — that path
+ * fires only when that field changes and hands you the value directly,
+ * skipping the diff every subscriber would otherwise have to do.
  */
 export function subscribe(cb: (s: Settings) => void): () => void {
   ensureHydrated();
@@ -266,5 +384,40 @@ export function subscribe(cb: (s: Settings) => void): () => void {
   }
   return (): void => {
     subscribers.delete(cb);
+  };
+}
+
+/**
+ * Per-key applier signature: receives the new value of `Settings[K]` whenever
+ * that field changes, and once with the current value at registration time.
+ */
+export type Applier<K extends keyof Settings> = (value: Settings[K]) => void;
+
+/**
+ * Register a function to be invoked whenever `settings[key]` changes. The
+ * applier is also invoked once with the current value at registration time
+ * so callers can use a single code path for "apply once now" + "apply on
+ * every change", just like `subscribe()`.
+ *
+ * Returns an unregister function. Prefer this over `subscribe()` for any
+ * consumer that only depends on a single field — `register()` skips the
+ * diff in the consumer and only fires when that field actually moves, so
+ * a volume slider tweak doesn't, e.g., re-rebuild the keymap Sets.
+ *
+ * The value passed to the applier is a defensive clone for the only nested
+ * field (`keys`); primitive fields pass through unchanged.
+ */
+export function register<K extends keyof Settings>(key: K, applier: Applier<K>): () => void {
+  ensureHydrated();
+  const set = getApplierSet(key);
+  const wrapped = applier as AnyApplier;
+  set.add(wrapped);
+  try {
+    applier(cloneValue(key, current[key]));
+  } catch (err) {
+    console.error(`[settings] register("${String(key)}") applier threw on initial dispatch:`, err);
+  }
+  return (): void => {
+    set.delete(wrapped);
   };
 }

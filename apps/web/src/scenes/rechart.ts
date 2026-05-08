@@ -1,11 +1,14 @@
 /**
  * Re-chart scene.
  *
- * Three sliders + Re-chart / Cancel buttons. Submitting POSTs to
+ * Three sliders + Preview / Re-chart / Cancel buttons. Submitting POSTs to
  * `/api/rechart` with the slider values and the songId picked up from the
  * scene-enter payload; the server re-runs `buildChart` against the cached
  * audio analysis, persists the new chart, and we navigate back to song-select
- * so the next play uses it.
+ * so the next play uses it. Pressing Preview instead asks the server to
+ * build the chart WITHOUT persisting it and renders a mini-timeline so the
+ * user can see where notes will land before committing — Preview can be
+ * re-run as many times as needed.
  *
  * Defaults match `DEFAULT_TUNABLES` on the server (`apps/server/src/chart.ts`).
  * If those literals change there, mirror them here so the slider initial
@@ -15,9 +18,17 @@
 import './scenes.css';
 import './rechart.css';
 import type { ChartV1 } from '@bongos-hero/shared';
-import type { Scene, SceneContext } from '../router.js';
-import { clear, el } from './dom.js';
+
+import { rechartSong, type RechartTunables as ApiRechartTunables } from '../api.js';
 import { BackgroundRenderer } from '../render/background.js';
+import {
+  createChartTimeline,
+  summarizeChart,
+  type ChartTimelineHandle,
+} from '../render/chartTimeline.js';
+import type { Scene, SceneContext } from '../router.js';
+
+import { clear, el, fmtNumber } from './dom.js';
 
 interface RechartTunables {
   rmsFloor: number;
@@ -82,13 +93,17 @@ let onKeyDown: ((ev: KeyboardEvent) => void) | null = null;
 let songId: string | null = null;
 let tunables: RechartTunables = { ...DEFAULT_TUNABLES };
 let submitBtn: HTMLButtonElement | null = null;
+let previewBtn: HTMLButtonElement | null = null;
 let cancelBtn: HTMLButtonElement | null = null;
 let resetBtn: HTMLButtonElement | null = null;
 let statusEl: HTMLDivElement | null = null;
 let spinnerEl: HTMLDivElement | null = null;
+let previewTitleEl: HTMLDivElement | null = null;
+let timeline: ChartTimelineHandle | null = null;
 let sliderInputs: HTMLInputElement[] = [];
 let sliderReadouts: HTMLSpanElement[] = [];
 let busy = false;
+let hasPreview = false;
 
 function ensureBackground(): BackgroundRenderer {
   if (!bg) {
@@ -122,6 +137,10 @@ function setBusy(b: boolean): void {
     submitBtn.disabled = b;
     submitBtn.textContent = b ? 'Re-charting…' : 'Re-chart';
   }
+  if (previewBtn) {
+    previewBtn.disabled = b;
+    previewBtn.textContent = b ? 'Working…' : 'Preview';
+  }
   if (cancelBtn) cancelBtn.disabled = b;
   if (resetBtn) resetBtn.disabled = b;
   for (const input of sliderInputs) {
@@ -153,6 +172,7 @@ function buildSliderRow(spec: SliderSpec): HTMLDivElement {
     tunables[spec.key] = clamped;
     input.value = String(clamped);
     readout.textContent = spec.format(clamped);
+    markPreviewStale();
   });
 
   sliderInputs.push(input);
@@ -175,31 +195,63 @@ function resetSliders(): void {
     if (input) input.value = String(value);
     if (readout) readout.textContent = spec.format(value);
   });
+  markPreviewStale();
 }
 
-interface RechartResponse {
-  chart: ChartV1;
+function currentTunablesPayload(): ApiRechartTunables {
+  return {
+    rmsFloor: tunables.rmsFloor,
+    minSpacingMs: tunables.minSpacingMs,
+    centroidThreshold: tunables.centroidThreshold,
+  };
 }
 
-async function postRechart(id: string, payload: RechartTunables): Promise<RechartResponse> {
-  const res = await fetch('/api/rechart', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ songId: id, ...payload }),
-  });
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
-    try {
-      const body = (await res.json()) as { error?: string };
-      if (typeof body.error === 'string' && body.error.length > 0) {
-        detail = body.error;
-      }
-    } catch {
-      // Body might be empty or non-JSON — fall through.
-    }
-    throw new Error(detail);
+function setPreviewTitle(text: string): void {
+  if (previewTitleEl) previewTitleEl.textContent = text;
+}
+
+function markPreviewStale(): void {
+  if (!hasPreview || !previewTitleEl) return;
+  if (!previewTitleEl.classList.contains('bh-rechart-preview-stale')) {
+    previewTitleEl.classList.add('bh-rechart-preview-stale');
+    setPreviewTitle(`${previewTitleEl.textContent ?? ''} — stale, click Preview to refresh`);
   }
-  return (await res.json()) as RechartResponse;
+}
+
+function clearPreviewStale(): void {
+  if (previewTitleEl) previewTitleEl.classList.remove('bh-rechart-preview-stale');
+}
+
+function updatePreviewTitleFromChart(chart: ChartV1): void {
+  const summary = summarizeChart(chart);
+  const bpmText = summary.bpm === undefined ? '—' : String(summary.bpm);
+  clearPreviewStale();
+  setPreviewTitle(
+    `Preview: ${fmtNumber(summary.notes)} notes, ${fmtNumber(summary.sustains)} sustains, ${fmtNumber(summary.sp)} SP notes, BPM ${bpmText}`,
+  );
+}
+
+async function onPreview(): Promise<void> {
+  if (busy) return;
+  if (!songId) {
+    setStatus('No song selected.', 'error');
+    return;
+  }
+  setBusy(true);
+  setStatus('Building preview chart…', 'info');
+  try {
+    const chart = await rechartSong(songId, { ...currentTunablesPayload(), preview: true });
+    hasPreview = true;
+    if (timeline) timeline.render(chart);
+    updatePreviewTitleFromChart(chart);
+    setStatus('Preview built. Tweak sliders and Preview again, or Re-chart to commit.', 'success');
+  } catch (err) {
+    console.error('[rechart] preview failed:', err);
+    const msg = err instanceof Error ? err.message : 'unknown error';
+    setStatus(`Preview failed: ${msg}`, 'error');
+  } finally {
+    setBusy(false);
+  }
 }
 
 async function onSubmit(sceneCtx: SceneContext): Promise<void> {
@@ -211,7 +263,7 @@ async function onSubmit(sceneCtx: SceneContext): Promise<void> {
   setBusy(true);
   setStatus('Re-running chart pipeline (onsets + features + lane classification)…', 'info');
   try {
-    await postRechart(songId, tunables);
+    await rechartSong(songId, { ...currentTunablesPayload(), preview: false });
     setStatus('Chart updated. Returning to song select…', 'success');
     window.setTimeout(() => sceneCtx.navigate('songSelect'), 600);
   } catch (err) {
@@ -234,20 +286,25 @@ export const rechartScene: Scene = {
     sliderInputs = [];
     sliderReadouts = [];
     busy = false;
+    hasPreview = false;
 
     submitBtn = el('button', { type: 'button', className: 'bh-btn bh-btn-primary' }, ['Re-chart']);
+    previewBtn = el('button', { type: 'button', className: 'bh-btn' }, ['Preview']);
     cancelBtn = el('button', { type: 'button', className: 'bh-btn bh-btn-ghost' }, ['Cancel']);
     resetBtn = el('button', { type: 'button', className: 'bh-btn' }, ['Reset']);
     statusEl = el('div', { className: 'bh-rechart-status' }, [
       songId === null
         ? 'No song selected. Press Cancel to return.'
-        : 'Adjust the sliders and press Re-chart.',
+        : 'Adjust the sliders, press Preview to inspect, then Re-chart to commit.',
     ]);
     spinnerEl = el('div', { className: 'bh-rechart-spinner' });
     spinnerEl.style.display = 'none';
 
     submitBtn.addEventListener('click', () => {
       void onSubmit(sceneCtx);
+    });
+    previewBtn.addEventListener('click', () => {
+      void onPreview();
     });
     cancelBtn.addEventListener('click', () => {
       sceneCtx.navigate('songSelect');
@@ -259,16 +316,27 @@ export const rechartScene: Scene = {
 
     const rows: HTMLDivElement[] = SLIDERS.map((s) => buildSliderRow(s));
 
+    timeline = createChartTimeline();
+    previewTitleEl = el('div', { className: 'bh-rechart-preview-title' }, [
+      'Preview: click Preview to render',
+    ]);
+    const previewWrap = el('div', { className: 'bh-rechart-preview' }, [
+      previewTitleEl,
+      timeline.root,
+    ]);
+
     const card = el('div', { className: 'bh-rechart-card' }, [
       el('h2', {}, ['Re-chart']),
       el('p', {}, [
         'Re-runs the chart pipeline against the cached audio analysis with ' +
-          'these tunables. Existing chart will be overwritten.',
+          'these tunables. Use Preview to see where notes will land before ' +
+          'committing — Re-chart overwrites the existing chart on disk.',
       ]),
       el('div', { className: 'bh-rechart-rows' }, rows),
+      previewWrap,
       spinnerEl,
       statusEl,
-      el('div', { className: 'bh-rechart-actions' }, [cancelBtn, resetBtn, submitBtn]),
+      el('div', { className: 'bh-rechart-actions' }, [cancelBtn, resetBtn, previewBtn, submitBtn]),
     ]);
 
     root = el('div', { className: 'bh-rechart-wrap' }, [card]);
@@ -318,16 +386,23 @@ export const rechartScene: Scene = {
       document.removeEventListener('keydown', onKeyDown);
       onKeyDown = null;
     }
+    if (timeline) {
+      timeline.dispose();
+      timeline = null;
+    }
     if (root) {
       clear(root);
       root.remove();
       root = null;
     }
     submitBtn = null;
+    previewBtn = null;
     cancelBtn = null;
     resetBtn = null;
     statusEl = null;
     spinnerEl = null;
+    previewTitleEl = null;
+    hasPreview = false;
     sliderInputs = [];
     sliderReadouts = [];
     songId = null;
