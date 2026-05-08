@@ -24,7 +24,8 @@ export type SceneId =
   | 'calibration'
   | 'settings'
   | 'practice'
-  | 'rechart';
+  | 'rechart'
+  | 'tutorial';
 
 export interface SceneContext {
   canvas: HTMLCanvasElement;

@@ -37,7 +37,7 @@ export const titleScene: Scene = {
     ensureBackground();
 
     titleHint = el('div', { className: 'bh-title-hint' }, [
-      'press SPACE for calibration  •  S for settings  •  mash any LEFT / RIGHT key to start',
+      'press SPACE for calibration  •  S for settings  •  T for tutorial  •  mash any LEFT / RIGHT key to start',
     ]);
     sceneCtx.overlay.appendChild(titleHint);
 
@@ -62,6 +62,13 @@ export const titleScene: Scene = {
       if (ev.code === 'KeyS') {
         ev.preventDefault();
         sceneCtx.navigate('settings');
+        return;
+      }
+      // Tutorial replay shortcut. Also a left-side mash key (`KeyT`), so it
+      // MUST be checked before the lane branch for the same reason as `KeyS`.
+      if (ev.code === 'KeyT') {
+        ev.preventDefault();
+        sceneCtx.navigate('tutorial');
         return;
       }
       // Any left- or right-side key (the same set used by the mash-mode

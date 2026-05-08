@@ -847,3 +847,50 @@
     sans-serif;
   color: rgba(245, 240, 227, 0.55);
 }
+
+/* ---- Tutorial scene ---- */
+
+.bh-tutorial-badge {
+  position: absolute;
+  top: 16px;
+  right: 24px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #ff62c2 0%, #c479ff 100%);
+  color: #1a0d2e;
+  font:
+    700 11px/1 'Segoe UI',
+    system-ui,
+    sans-serif;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  box-shadow:
+    0 6px 18px rgba(0, 0, 0, 0.6),
+    0 0 14px rgba(255, 98, 194, 0.5);
+  z-index: 10;
+  pointer-events: none;
+}
+
+.bh-tutorial-step {
+  position: absolute;
+  left: 50%;
+  top: 64px;
+  transform: translateX(-50%);
+  max-width: min(720px, 80vw);
+  padding: 14px 24px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(28, 12, 44, 0.95) 0%, rgba(16, 6, 25, 0.95) 100%);
+  border: 1px solid rgba(196, 121, 255, 0.65);
+  color: #f5f0e3;
+  font:
+    600 16px/1.4 'Segoe UI',
+    system-ui,
+    sans-serif;
+  letter-spacing: 0.02em;
+  text-align: center;
+  box-shadow:
+    0 12px 30px rgba(0, 0, 0, 0.6),
+    0 0 24px rgba(196, 121, 255, 0.35);
+  z-index: 10;
+  pointer-events: none;
+}

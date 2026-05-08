@@ -37,6 +37,14 @@ export interface Settings {
   colorBlind: boolean;
   /** Customizable bongo key bindings (left + right `KeyboardEvent.code` lists). */
   keys: KeyBindings;
+  /**
+   * True once the player has seen (or skipped through) the built-in tutorial
+   * at least once. Drives the first-run auto-jump from `main.ts` so returning
+   * players boot straight into the title screen. The tutorial scene flips
+   * this to `true` on completion or Esc; replay is always available via the
+   * `T` hotkey on the title.
+   */
+  tutorialSeen: boolean;
 }
 
 /**
@@ -106,6 +114,7 @@ export const DEFAULTS: Readonly<Settings> = Object.freeze({
     left: DEFAULT_LEFT_KEYS as string[],
     right: DEFAULT_RIGHT_KEYS as string[],
   }),
+  tutorialSeen: false,
 });
 
 const STORAGE_KEY = 'bongos.settings';
@@ -159,6 +168,7 @@ function cloneSettings(s: Settings): Settings {
     scrollSpeedMul: s.scrollSpeedMul,
     colorBlind: s.colorBlind,
     keys: { left: [...s.keys.left], right: [...s.keys.right] },
+    tutorialSeen: s.tutorialSeen,
   };
 }
 
@@ -171,6 +181,7 @@ function normalize(partial: Partial<Settings>, base: Settings): Settings {
   }
   if ('colorBlind' in partial) next.colorBlind = Boolean(partial.colorBlind);
   if ('keys' in partial) next.keys = normalizeKeys(partial.keys);
+  if ('tutorialSeen' in partial) next.tutorialSeen = Boolean(partial.tutorialSeen);
   return next;
 }
 
