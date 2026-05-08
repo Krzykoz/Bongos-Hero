@@ -18,6 +18,7 @@ export default tseslint.config(
       'docs/**',
       'eslint.config.js',
       '**/vite.config.ts',
+      '**/vitest.config.ts',
     ],
   },
 

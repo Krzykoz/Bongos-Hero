@@ -10,12 +10,29 @@
  * Drawing is exclusively `drawImage`-based: every drum-head texture is
  * pre-rasterised once by `noteSprites.ts` and blitted from there. The hot
  * loop allocates nothing.
+ *
+ * ## Settings hooks
+ *
+ * - `settings.scrollSpeedMul` (0.5..2.0) scales the spawn-to-hit travel time
+ *   inversely: 2.0 = travel twice as fast (`travelMs / 2`), 0.5 = travel
+ *   half as fast (`travelMs * 2`). The hit-line position (progress=1) is
+ *   independent of `travelMs`, so changing scroll speed does NOT shift it.
+ * - `settings.colorBlind` is handled upstream in `theme.ts`; the renderer
+ *   just compares the active palette epoch and refreshes its cached sprite
+ *   handles when it changes.
  */
 
 import type { ChartNote, ChartV1 } from '@bongos-hero/shared';
 
+import { loadSettings, subscribe } from '../settings/index.js';
 import { laneCenterX, progressToY, scaleAt } from './geom.js';
-import { getNoteSprite, getSpOverlaySprite, type NoteSprite } from './noteSprites.js';
+import {
+  getNoteSprite,
+  getSpOverlaySprite,
+  getTrailSprite,
+  type NoteSprite,
+} from './noteSprites.js';
+import { getPaletteEpoch } from './theme.js';
 
 const DEFAULT_TRAVEL_MS = 1500;
 const DEFAULT_LATE_GRACE_MS = 110;
@@ -26,6 +43,20 @@ const DEFAULT_LATE_GRACE_MS = 110;
  * threshold is generous enough that ordinary clock jitter is ignored.
  */
 const BACKWARDS_SEEK_THRESHOLD_MS = 100;
+
+/**
+ * Module-level scroll-speed multiplier driven by `settings.scrollSpeedMul`.
+ * Read at module init AND kept fresh via `settings.subscribe` so a change to
+ * the slider updates the next frame without anyone touching the rAF loop.
+ *
+ * The multiplier scales the *speed* — so the effective travel time is
+ * `baseTravelMs / currentScrollSpeedMul`. Larger value = faster scroll =
+ * shorter time on screen.
+ */
+let currentScrollSpeedMul = loadSettings().scrollSpeedMul;
+subscribe((s) => {
+  currentScrollSpeedMul = s.scrollSpeedMul;
+});
 
 export interface NotesRendererOptions {
   /** Travel time from spawn line to hit line, in ms. Default 1500. */
@@ -41,11 +72,21 @@ export interface NotesRenderState {
   starPowerActive?: boolean;
   /** When provided, these note indexes will be skipped in rendering (already hit). */
   hitNoteIndexes?: ReadonlySet<number>;
+  /**
+   * True if the player currently has the L-lane sustain key held. Drives
+   * the brightened "live" trail look while the hold is in progress, and
+   * keeps consumed-but-still-held sustain notes visible (trail only, head
+   * suppressed) while they accumulate score. No-op for non-sustain notes
+   * and when no L sustain is currently active.
+   */
+  heldL?: boolean;
+  /** Same as `heldL`, for the R lane. */
+  heldR?: boolean;
 }
 
 export class NotesRenderer {
-  /** Travel time in ms (read-only after construction). */
-  readonly travelMs: number;
+  /** Base travel time in ms before the user-facing scroll-speed multiplier. */
+  readonly baseTravelMs: number;
   /** Late-hit grace window in ms (read-only after construction). */
   readonly lateGraceMs: number;
 
@@ -63,9 +104,15 @@ export class NotesRenderer {
 
   // Cached sprite handles. Built lazily on the first `draw` so constructing
   // a renderer never touches Canvas APIs (handy for tests / SSR contexts).
+  // Re-fetched whenever the active palette epoch advances (color-blind
+  // toggle), since `noteSprites.ts` clears its cache and rebuilds against
+  // the new palette.
   #spriteL: NoteSprite | null = null;
   #spriteR: NoteSprite | null = null;
   #spOverlay: NoteSprite | null = null;
+  #trailL: NoteSprite | null = null;
+  #trailR: NoteSprite | null = null;
+  #spritePaletteEpoch = -1;
 
   // Pre-extracted numeric anchors / sizes so the hot loop never has to deref
   // through the sprite struct.
@@ -75,10 +122,28 @@ export class NotesRenderer {
   #sizeR = 0;
   #anchorSp = 0;
   #sizeSp = 0;
+  // Trail "size" here is the source-bitmap WIDTH (pill is taller than wide);
+  // height is independent and computed per-note from the highway endpoints.
+  #trailWidthL = 0;
+  #trailWidthR = 0;
 
   constructor(opts: NotesRendererOptions = {}) {
-    this.travelMs = opts.travelMs ?? DEFAULT_TRAVEL_MS;
+    this.baseTravelMs = opts.travelMs ?? DEFAULT_TRAVEL_MS;
     this.lateGraceMs = opts.lateGraceMs ?? DEFAULT_LATE_GRACE_MS;
+  }
+
+  /**
+   * Effective spawn-to-hit travel time, in ms, after applying the live
+   * `settings.scrollSpeedMul`. Larger multiplier = faster scroll = smaller
+   * value here. Re-evaluated on every read so a settings change is picked
+   * up by the next frame without any extra plumbing.
+   *
+   * The hit-line position is at `progress = 1`, which is independent of
+   * `travelMs` (`progress = 1 - deltaMs / travelMs`, deltaMs=0 → 1), so
+   * changing the scroll speed never moves the hit line.
+   */
+  get travelMs(): number {
+    return this.baseTravelMs / currentScrollSpeedMul;
   }
 
   /** Returns the loaded chart's `audioOffsetMs`, or 0 if no chart is loaded. */
@@ -165,8 +230,11 @@ export class NotesRenderer {
 
   /**
    * Draw all currently visible notes, skipping any indexes the caller has
-   * marked as already hit. The entire draw is wrapped in `save`/`restore`
-   * so any composite-op or alpha changes never leak out of this renderer.
+   * marked as already hit — *unless* the index is a sustain note that is
+   * still being held (in which case we draw the trail with the head
+   * suppressed so the player sees what they're holding through). The entire
+   * draw is wrapped in `save`/`restore` so any composite-op or alpha
+   * changes never leak out of this renderer.
    */
   draw(ctx: CanvasRenderingContext2D, state: NotesRenderState): void {
     const notes = this.#notes;
@@ -182,40 +250,95 @@ export class NotesRenderer {
     const spriteL = this.#spriteL!;
     const spriteR = this.#spriteR!;
     const spOverlay = this.#spOverlay!;
+    const trailL = this.#trailL!;
+    const trailR = this.#trailR!;
     const sourceL = spriteL.source;
     const sourceR = spriteR.source;
     const sourceSp = spOverlay.source;
+    const sourceTrailL = trailL.source;
+    const sourceTrailR = trailR.source;
     const anchorL = this.#anchorL;
     const anchorR = this.#anchorR;
     const sizeL = this.#sizeL;
     const sizeR = this.#sizeR;
     const anchorSp = this.#anchorSp;
     const sizeSp = this.#sizeSp;
+    const trailWidthL = this.#trailWidthL;
+    const trailWidthR = this.#trailWidthR;
 
     const travelMs = this.travelMs;
     const nowMs = state.nowMs;
     const hitSet = state.hitNoteIndexes;
     const sp = state.starPowerActive === true;
+    const heldL = state.heldL === true;
+    const heldR = state.heldR === true;
     const ghostFactor = 1.18;
 
     ctx.save();
 
     for (let i = firstIdx; i <= lastIdx; i++) {
-      if (hitSet?.has(i)) continue;
-
       const note = notes[i];
       if (note === undefined) continue;
 
-      const deltaMs = note.tMs - nowMs;
-      let p = 1 - deltaMs / travelMs;
-      if (p < 0) p = 0;
-      else if (p > 1) p = 1;
-
-      const cx = laneCenterX(note.lane, p);
-      const cy = progressToY(p);
-      const s = scaleAt(p);
-
       const isL = note.lane === 'L';
+      const consumed = hitSet?.has(i) === true;
+      const durMs = note.durMs ?? 0;
+      const isSustain = durMs > 0;
+      const held = isSustain && (isL ? heldL : heldR);
+
+      // A consumed regular note (or a consumed sustain whose hold ended)
+      // is fully dismissed — same short-circuit as before. A consumed
+      // sustain that is STILL being held continues to render its trail
+      // (with the head suppressed) so the player can see how much hold
+      // time they have left.
+      if (consumed && !held) continue;
+
+      const deltaMs = note.tMs - nowMs;
+      let headP = 1 - deltaMs / travelMs;
+      if (headP < 0) headP = 0;
+      else if (headP > 1) headP = 1;
+
+      const cx = laneCenterX(note.lane, headP);
+      const cy = progressToY(headP);
+      const s = scaleAt(headP);
+
+      // ---- Trail (drawn first so the head occludes the bottom edge) ----
+      if (isSustain) {
+        let tailP = 1 - (deltaMs + durMs) / travelMs;
+        if (tailP < 0) tailP = 0;
+        else if (tailP > 1) tailP = 1;
+
+        const yTail = progressToY(tailP);
+        const trailHeightPx = cy - yTail;
+        if (trailHeightPx > 0.5) {
+          const trailWidth = (isL ? trailWidthL : trailWidthR) * s;
+          const trailX = cx - trailWidth * 0.5;
+          const trailSrc = isL ? sourceTrailL : sourceTrailR;
+
+          // Resting (not held): muted alpha, plain composite. Active
+          // (held): full alpha + an additive overpaint that visibly
+          // brightens the rope while the player keeps the bongo down.
+          if (held) {
+            ctx.globalAlpha = 1;
+            ctx.drawImage(trailSrc, trailX, yTail, trailWidth, trailHeightPx);
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.globalAlpha = 0.45;
+            ctx.drawImage(trailSrc, trailX, yTail, trailWidth, trailHeightPx);
+            ctx.globalCompositeOperation = 'source-over';
+            ctx.globalAlpha = 1;
+          } else {
+            ctx.globalAlpha = 0.7;
+            ctx.drawImage(trailSrc, trailX, yTail, trailWidth, trailHeightPx);
+            ctx.globalAlpha = 1;
+          }
+        }
+      }
+
+      // A consumed-but-held sustain only renders its trail — the head was
+      // already destroyed by the player's hit, and the SP overlay rides
+      // along with the head, so it goes away too.
+      if (consumed) continue;
+
       const source = isL ? sourceL : sourceR;
       const anchor = isL ? anchorL : anchorR;
       const size = isL ? sizeL : sizeR;
@@ -254,8 +377,24 @@ export class NotesRenderer {
 
   // ---- internals ------------------------------------------------------------
 
-  /** Lazily build and memoise the lane / SP sprites and their anchor consts. */
+  /**
+   * Lazily build and memoise the lane / SP / trail sprites and their anchor
+   * consts. On a palette change (color-blind toggle), `noteSprites.ts`
+   * clears its own caches and `getPaletteEpoch()` advances; we mirror that
+   * here by dropping our cached handles so the next draw rebuilds against
+   * the new palette. Anchor / size are constant across palettes (sprite
+   * geometry is palette-independent) so the recomputed values always agree.
+   */
   #ensureSprites(): void {
+    const epoch = getPaletteEpoch();
+    if (epoch !== this.#spritePaletteEpoch) {
+      this.#spriteL = null;
+      this.#spriteR = null;
+      this.#spOverlay = null;
+      this.#trailL = null;
+      this.#trailR = null;
+      this.#spritePaletteEpoch = epoch;
+    }
     if (this.#spriteL === null) {
       const s = getNoteSprite('L');
       this.#spriteL = s;
@@ -273,6 +412,16 @@ export class NotesRenderer {
       this.#spOverlay = s;
       this.#anchorSp = s.anchor;
       this.#sizeSp = s.size;
+    }
+    if (this.#trailL === null) {
+      const s = getTrailSprite('L');
+      this.#trailL = s;
+      this.#trailWidthL = s.size;
+    }
+    if (this.#trailR === null) {
+      const s = getTrailSprite('R');
+      this.#trailR = s;
+      this.#trailWidthR = s.size;
     }
   }
 }

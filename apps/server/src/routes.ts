@@ -1,11 +1,14 @@
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { stat, writeFile } from 'node:fs/promises';
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import type { ChartV1, ImportResponse, JobState, SongMeta } from '@bongos-hero/shared';
 
+import { extractOnsetFeatures } from './audioFeatures.js';
+import { buildChart, type ChartTunables } from './chart.js';
 import type { JobsManager } from './jobs.js';
+import { detectOnsets } from './onsets.js';
 import { audioPath, chartPath } from './paths.js';
 import { deleteSong, getSong, listSongs } from './store.js';
 
@@ -17,6 +20,21 @@ interface IdParams {
 
 interface ImportBody {
   url?: unknown;
+}
+
+interface RechartBody {
+  songId?: unknown;
+  rmsFloor?: unknown;
+  minSpacingMs?: unknown;
+  centroidThreshold?: unknown;
+}
+
+interface RechartResponse {
+  chart: ChartV1;
+}
+
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v);
 }
 
 interface ParsedRange {
@@ -86,6 +104,47 @@ export async function registerRoutes(app: FastifyInstance, jobs: JobsManager): P
     const jobId = jobs.enqueueImport(url.trim());
     const payload: ImportResponse = { jobId };
     return reply.code(202).send(payload);
+  });
+
+  // Re-run the chart pipeline on an already-imported song's cached audio
+  // with adjustable tunables and persist the result over the existing
+  // chart.json. Re-derives onsets + features from audio.ogg on every call —
+  // we don't persist the FeatureSet, and the audio file IS our cache.
+  app.post('/api/rechart', async (req: FastifyRequest, reply: FastifyReply) => {
+    const body = (req.body ?? {}) as RechartBody;
+    const songId = body.songId;
+    if (typeof songId !== 'string' || songId.length === 0) {
+      return reply.code(400).send({ error: 'songId is required' });
+    }
+
+    const audioFile = audioPath(songId);
+    const audioBytes = await fileSize(audioFile);
+    if (audioBytes === null) {
+      return reply.code(404).send({ error: 'song not imported' });
+    }
+
+    const tunables: ChartTunables = {};
+    if (isFiniteNumber(body.rmsFloor)) tunables.rmsFloor = body.rmsFloor;
+    if (isFiniteNumber(body.minSpacingMs)) tunables.minSpacingMs = body.minSpacingMs;
+    if (isFiniteNumber(body.centroidThreshold)) tunables.centroidThreshold = body.centroidThreshold;
+
+    let chart: ChartV1;
+    try {
+      const onsets = await detectOnsets({ audioPath: audioFile });
+      const features = await extractOnsetFeatures({
+        audioPath: audioFile,
+        onsetsSec: onsets.timesSec,
+      });
+      chart = buildChart({ features }, tunables);
+      await writeFile(chartPath(songId), `${JSON.stringify(chart, null, 2)}\n`, 'utf8');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      req.log.error({ err, songId }, 'rechart failed');
+      return reply.code(500).send({ error: `rechart failed: ${msg.slice(-1000)}` });
+    }
+
+    const payload: RechartResponse = { chart };
+    return payload;
   });
 
   // eslint-disable-next-line @typescript-eslint/require-await -- Fastify route handler: kept async for consistency with sibling handlers that legitimately await.

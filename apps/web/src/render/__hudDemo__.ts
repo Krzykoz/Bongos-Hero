@@ -87,6 +87,9 @@ export function runHudDemo(canvas: HTMLCanvasElement): () => void {
       consumed,
       notesPlayed: 0,
       notesTotal: 0,
+      rockMeter: spMeter,
+      isFailed: false,
+      activeHolds: [],
     };
 
     const songTimeMs = elapsedMs % SONG_DURATION_MS;

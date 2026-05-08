@@ -24,7 +24,7 @@ import {
   laneCenterX,
   progressToY,
 } from './geom.js';
-import { THEME } from './theme.js';
+import { getPaletteEpoch, THEME } from './theme.js';
 
 export interface HighwayRenderState {
   /** Lane currently held by the player; renders a glow under that lane. */
@@ -44,6 +44,8 @@ export interface HighwayRenderState {
 /** Internal cache of canvas gradients keyed off the owning context. */
 interface GradientCache {
   ctx: CanvasRenderingContext2D;
+  /** Palette epoch the lane glow gradients were built against. */
+  paletteEpoch: number;
   bg: CanvasGradient;
   highwayFill: CanvasGradient;
   glowL: CanvasGradient;
@@ -200,10 +202,13 @@ export class HighwayRenderer {
   /**
    * Build (or reuse) the gradient cache for `ctx`. Gradients are tied to a
    * specific `CanvasRenderingContext2D` instance, so we rebuild if the
-   * caller swaps contexts on us.
+   * caller swaps contexts on us. We also rebuild whenever the active
+   * palette epoch advances, since the lane glow gradients have the L/R
+   * colours baked in at construction time.
    */
   #getCache(ctx: CanvasRenderingContext2D): GradientCache {
-    if (this.#cache && this.#cache.ctx === ctx) {
+    const epoch = getPaletteEpoch();
+    if (this.#cache && this.#cache.ctx === ctx && this.#cache.paletteEpoch === epoch) {
       return this.#cache;
     }
 
@@ -225,7 +230,7 @@ export class HighwayRenderer {
     glowR.addColorStop(0, THEME.laneR.glow);
     glowR.addColorStop(1, 'rgba(0,0,0,0)');
 
-    const cache: GradientCache = { ctx, bg, highwayFill, glowL, glowR };
+    const cache: GradientCache = { ctx, paletteEpoch: epoch, bg, highwayFill, glowL, glowR };
     this.#cache = cache;
     return cache;
   }

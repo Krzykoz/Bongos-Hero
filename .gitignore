@@ -14,3 +14,4 @@ build/
 # Generated song data
 data/songs/*/
 !data/songs/.gitkeep
+screenshots/

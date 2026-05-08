@@ -12,6 +12,25 @@ export interface ChartNote {
   lane: Lane;
   /** True if this note is part of a Star-Power phrase. */
   sp?: boolean;
+  /**
+   * When present and > 0, this is a "sustain" note: the player must hold the
+   * lane key from `tMs` for `durMs` milliseconds. Renderers draw a trail
+   * extending up from the note head; the scoring engine awards a per-second
+   * bonus on a clean release and breaks combo on an early release.
+   *
+   * Older charts predate this field, so it is optional for backward
+   * compatibility; consumers default it to 0 when undefined.
+   */
+  durMs?: number;
+}
+
+export interface ChartSection {
+  /** Section start in milliseconds, inclusive. */
+  startMs: number;
+  /** Section end in milliseconds, exclusive (or song end for the last). */
+  endMs: number;
+  /** Mean smoothed RMS for the span, normalised to 0..1 across the song. */
+  intensity: number;
 }
 
 export interface ChartV1 {
@@ -22,6 +41,12 @@ export interface ChartV1 {
   bpm?: number;
   /** Notes sorted ascending by tMs. */
   notes: ChartNote[];
+  /**
+   * Optional detected verse/chorus-like sections, in ascending order, covering
+   * the entire song without gaps. Older charts predate this field, so it is
+   * optional for backward compatibility.
+   */
+  sections?: ChartSection[];
 }
 
 export interface SongMeta {

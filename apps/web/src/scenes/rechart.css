@@ -1,0 +1,179 @@
+/* Bongos Hero — Re-chart scene styles.
+ *
+ * Layout mirrors the calibration / settings cards (.bh-cal-* / .bh-set-*) so
+ * the three "tweak something then save" screens feel like siblings.
+ */
+
+.bh-rechart-wrap {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+}
+
+.bh-rechart-card {
+  width: min(560px, 92vw);
+  padding: 32px 36px;
+  background: linear-gradient(180deg, rgba(28, 12, 44, 0.95) 0%, rgba(16, 6, 25, 0.95) 100%);
+  border: 1px solid #5a2d77;
+  border-radius: 16px;
+  color: #f5f0e3;
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.75),
+    0 0 32px rgba(196, 121, 255, 0.3);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.bh-rechart-card h2 {
+  margin: 0;
+  font:
+    700 28px/1.1 Georgia,
+    'Times New Roman',
+    serif;
+  letter-spacing: 0.04em;
+  color: #f0e6ff;
+  text-shadow: 0 0 16px rgba(196, 121, 255, 0.45);
+  text-align: center;
+}
+
+.bh-rechart-card p {
+  margin: 0;
+  color: rgba(245, 240, 227, 0.78);
+  font:
+    400 14px/1.5 'Segoe UI',
+    system-ui,
+    sans-serif;
+  text-align: center;
+}
+
+.bh-rechart-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.bh-rechart-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  background: rgba(10, 6, 18, 0.6);
+  border: 1px solid #3a1d4e;
+  border-radius: 10px;
+}
+
+.bh-rechart-row-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.bh-rechart-label-text {
+  font:
+    600 13px/1.2 'Segoe UI',
+    system-ui,
+    sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(245, 240, 227, 0.78);
+}
+
+.bh-rechart-readout {
+  font:
+    700 16px/1.1 'Courier New',
+    monospace;
+  color: #f0e6ff;
+  letter-spacing: 0.04em;
+}
+
+.bh-rechart-desc {
+  font:
+    400 12px/1.4 'Segoe UI',
+    system-ui,
+    sans-serif;
+  color: rgba(245, 240, 227, 0.55);
+}
+
+.bh-rechart-slider {
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  background: linear-gradient(90deg, #c479ff 0%, #ff62c2 100%);
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+}
+
+.bh-rechart-slider:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.bh-rechart-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #f5f0e3;
+  border: 2px solid #c479ff;
+  box-shadow: 0 0 10px rgba(196, 121, 255, 0.6);
+  cursor: pointer;
+}
+
+.bh-rechart-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #f5f0e3;
+  border: 2px solid #c479ff;
+  box-shadow: 0 0 10px rgba(196, 121, 255, 0.6);
+  cursor: pointer;
+}
+
+.bh-rechart-slider:focus-visible {
+  outline: 2px solid #c479ff;
+  outline-offset: 4px;
+}
+
+.bh-rechart-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.bh-rechart-status {
+  font:
+    500 13px/1.4 'Segoe UI',
+    system-ui,
+    sans-serif;
+  color: rgba(245, 240, 227, 0.85);
+  min-height: 1.4em;
+  text-align: center;
+}
+
+.bh-rechart-status.bh-error {
+  color: #ff6080;
+}
+
+.bh-rechart-status.bh-success {
+  color: #80ffc0;
+}
+
+.bh-rechart-spinner {
+  margin: 0 auto;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid rgba(196, 121, 255, 0.25);
+  border-top-color: #c479ff;
+  animation: bh-rechart-spin 800ms linear infinite;
+}
+
+@keyframes bh-rechart-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

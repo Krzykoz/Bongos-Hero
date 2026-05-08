@@ -12,11 +12,11 @@
  * recreated each frame because its colour stops depend on `songTimeMs`.
  */
 
-import type { Lane } from '@bongos-hero/shared';
+import type { ChartSection, Lane } from '@bongos-hero/shared';
 
 import type { ScoringSnapshot } from '../game/scoring.js';
 import { HIGHWAY_NEAR_Y, STAGE_W, laneCenterX } from './geom.js';
-import { THEME } from './theme.js';
+import { getActivePalette, getPaletteEpoch, THEME } from './theme.js';
 
 const TWO_PI = Math.PI * 2;
 
@@ -42,6 +42,15 @@ const SP_W = 520;
 const SP_H = 20;
 const SP_LABEL_Y = 22;
 
+// Rock meter (Guitar-Hero-style fail bar) — slim vertical bar pinned to the
+// LEFT edge of the canvas, between the score column and the highway. Drawn
+// bottom-up so the visual depletion mirrors the dread of a draining meter.
+const ROCK_X = 20;
+const ROCK_W = 16;
+const ROCK_Y = 70;
+const ROCK_H = 570;
+const ROCK_PULSE_DURATION_MS = 320;
+
 const KEY_W = 72;
 const KEY_H = 56;
 const KEY_TOP = HIGHWAY_NEAR_Y + 50;
@@ -50,6 +59,25 @@ const PROGRESS_X = 60;
 const PROGRESS_Y = 700;
 const PROGRESS_W = STAGE_W - 120;
 const PROGRESS_H = 6;
+
+// Section scrollbar (verse/chorus map): horizontal stripe across the top
+// edge of the canvas, sitting INSIDE the same horizontal margin as the
+// bottom progress bar so the layout reads as a matched pair. Sized to leave
+// room for the song title (left), score (center), and multiplier (right).
+const SECTION_BAR_X = 60;
+const SECTION_BAR_Y = 8;
+const SECTION_BAR_W = STAGE_W - 120;
+const SECTION_BAR_H = 8;
+/** Background trough fill (matches the rock/SP meters for visual consistency). */
+const SECTION_BAR_BG = 'rgba(20, 14, 36, 0.85)';
+/** Outline drawn on top of the cached overlay each frame. */
+const SECTION_BAR_OUTLINE = 'rgba(255, 255, 255, 0.18)';
+/** Min alpha for the dimmest section so even silent stretches are visible. */
+const SECTION_MIN_ALPHA = 0.25;
+/** Max alpha for the most intense section. */
+const SECTION_MAX_ALPHA = 0.95;
+/** Playhead width in canvas pixels. */
+const SECTION_PLAYHEAD_W = 2;
 
 const PAUSE_HINT_X = STAGE_W - 60;
 const PAUSE_HINT_Y = PROGRESS_Y - 18;
@@ -128,6 +156,18 @@ function pickRingGradient(rings: RingGradients, multiplier: number): CanvasGradi
   }
 }
 
+// ---- Rock meter colour zones ------------------------------------------------
+
+const ROCK_COLOR_RED = '#ef4444';
+const ROCK_COLOR_AMBER = '#f59e0b';
+const ROCK_COLOR_GREEN = '#10b981';
+
+function rockZoneColor(meter: number): string {
+  if (meter < 0.2) return ROCK_COLOR_RED;
+  if (meter < 0.5) return ROCK_COLOR_AMBER;
+  return ROCK_COLOR_GREEN;
+}
+
 // ---- Pure helpers -----------------------------------------------------------
 
 /**
@@ -166,7 +206,64 @@ function roundedRectPath(
   ctx.closePath();
 }
 
-// ---- Public types -----------------------------------------------------------
+// ---- Section overlay cache --------------------------------------------------
+
+type AnyCanvas = HTMLCanvasElement | OffscreenCanvas;
+type AnyCtx2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+
+interface SectionOverlay {
+  canvas: AnyCanvas;
+  /** Reference identity used to invalidate when the chart changes. */
+  sections: readonly ChartSection[];
+  songDurationMs: number;
+  paletteEpoch: number;
+}
+
+function createOverlayCanvas(w: number, h: number): { canvas: AnyCanvas; ctx: AnyCtx2D } {
+  if ('OffscreenCanvas' in globalThis) {
+    const canvas = new OffscreenCanvas(w, h);
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('hud: OffscreenCanvas 2D context unavailable');
+    }
+    return { canvas, ctx };
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('hud: HTMLCanvasElement 2D context unavailable');
+  }
+  return { canvas, ctx };
+}
+
+/**
+ * Parse a CSS colour of the form `rgba(r,g,b,a)` or `rgb(r,g,b)` into its
+ * numeric RGB components. The alpha channel of the source string is ignored
+ * because the section overlay rebuilds alpha from the section intensity.
+ *
+ * Returns `null` if the colour can't be parsed; callers fall back to a
+ * neutral white.
+ */
+function parseRgbComponents(color: string): { r: number; g: number; b: number } | null {
+  const trimmed = color.trim();
+  if (trimmed.startsWith('#')) {
+    const hex = trimmed.slice(1);
+    if (hex.length === 6) {
+      const r = parseInt(hex.slice(0, 2), 16);
+      const g = parseInt(hex.slice(2, 4), 16);
+      const b = parseInt(hex.slice(4, 6), 16);
+      if (Number.isFinite(r) && Number.isFinite(g) && Number.isFinite(b)) {
+        return { r, g, b };
+      }
+    }
+    return null;
+  }
+  const m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(trimmed);
+  if (!m) return null;
+  return { r: Number(m[1]), g: Number(m[2]), b: Number(m[3]) };
+}
 
 export interface HudState {
   snapshot: ScoringSnapshot;
@@ -186,12 +283,29 @@ export interface HudState {
    * lane-press indicator and the caps would just clutter the bottom area.
    */
   hideKeyCaps?: boolean;
+  /**
+   * Optional detected song sections (verse/chorus-like). When present, the
+   * top-of-screen scrollbar paints a coloured stripe per section whose
+   * brightness reflects the section's intensity.
+   */
+  chartSections?: readonly ChartSection[];
 }
 
 // ---- Renderer ---------------------------------------------------------------
 
 export class HudRenderer {
   #cache: GradientCache | null = null;
+
+  // Rock-meter pulse state. We keep the last seen meter value so we can
+  // detect a change between frames and stamp `#rockChangedAtMs` for the
+  // glow-decay animation. Pure number fields → no per-frame allocation.
+  #lastRockMeter = -1;
+  #rockChangedAtMs = -Infinity;
+
+  // Section scrollbar overlay: pre-rasterised once per (chart, duration,
+  // palette) tuple, then blitted per frame so the only per-frame allocation
+  // is the playhead line on top.
+  #sectionOverlay: SectionOverlay | null = null;
 
   constructor() {
     // Gradients are lazily built in `draw` so we don't need a ctx at
@@ -204,12 +318,14 @@ export class HudRenderer {
 
     ctx.save();
 
+    this.#drawSectionScrollbar(ctx, state.chartSections, songTimeMs, songDurationMs);
     if (state.songTitle !== undefined && state.songTitle.length > 0) {
       this.#drawSongTitle(ctx, state.songTitle);
     }
     this.#drawScore(ctx, snapshot.score);
     this.#drawMultiplierBadge(ctx, cache, snapshot, songTimeMs);
     this.#drawSpMeter(ctx, cache, snapshot, songTimeMs);
+    this.#drawRockMeter(ctx, snapshot.rockMeter, songTimeMs);
     if (state.hideKeyCaps !== true) {
       this.#drawLaneIndicators(ctx, pressedL, pressedR);
     }
@@ -395,6 +511,60 @@ export class HudRenderer {
     ctx.stroke();
   }
 
+  #drawRockMeter(ctx: CanvasRenderingContext2D, rockMeter: number, songTimeMs: number): void {
+    const meter = Math.max(0, Math.min(1, rockMeter));
+
+    // Track meter changes to drive the optional pulse glow. We compare the
+    // raw value rather than rounding so even tiny refills register.
+    if (meter !== this.#lastRockMeter) {
+      if (this.#lastRockMeter >= 0) {
+        this.#rockChangedAtMs = songTimeMs;
+      }
+      this.#lastRockMeter = meter;
+    }
+
+    const radius = ROCK_W * 0.5;
+    const fillH = meter * ROCK_H;
+    const fillY = ROCK_Y + ROCK_H - fillH;
+    const color = rockZoneColor(meter);
+
+    // Background trough: dark translucent so the bar reads against any
+    // highway background.
+    ctx.fillStyle = 'rgba(20, 14, 36, 0.85)';
+    roundedRectPath(ctx, ROCK_X, ROCK_Y, ROCK_W, ROCK_H, radius);
+    ctx.fill();
+
+    if (fillH > 0) {
+      ctx.save();
+      // Clip to the rounded outline so the fill conforms to the trough.
+      roundedRectPath(ctx, ROCK_X, ROCK_Y, ROCK_W, ROCK_H, radius);
+      ctx.clip();
+      ctx.fillStyle = color;
+      ctx.fillRect(ROCK_X, fillY, ROCK_W, fillH);
+      ctx.restore();
+    }
+
+    // Pulse: a brief glow that decays linearly to 0 after a meter change.
+    // No allocation per frame: just compute alpha from the elapsed delta.
+    const sinceChange = songTimeMs - this.#rockChangedAtMs;
+    if (sinceChange >= 0 && sinceChange < ROCK_PULSE_DURATION_MS) {
+      const pulse = 1 - sinceChange / ROCK_PULSE_DURATION_MS;
+      ctx.save();
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.55 * pulse;
+      ctx.lineWidth = 3;
+      roundedRectPath(ctx, ROCK_X, ROCK_Y, ROCK_W, ROCK_H, radius);
+      ctx.stroke();
+      ctx.restore();
+    } else {
+      // Static outline for read-against-bg clarity when not pulsing.
+      ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+      ctx.lineWidth = 1.5;
+      roundedRectPath(ctx, ROCK_X, ROCK_Y, ROCK_W, ROCK_H, radius);
+      ctx.stroke();
+    }
+  }
+
   #drawLaneIndicators(ctx: CanvasRenderingContext2D, pressedL: boolean, pressedR: boolean): void {
     this.#drawKeyCap(ctx, 'L', 'F', pressedL);
     this.#drawKeyCap(ctx, 'R', 'J', pressedR);
@@ -476,6 +646,100 @@ export class HudRenderer {
     ctx.textAlign = 'right';
     ctx.textBaseline = 'alphabetic';
     ctx.fillText('ESC to pause', PAUSE_HINT_X, PAUSE_HINT_Y);
+  }
+
+  /**
+   * Top-of-canvas section scrollbar. The coloured stripes are baked once per
+   * `(sections, songDurationMs, palette)` tuple into an offscreen canvas
+   * cached on the renderer. Per-frame work is one `drawImage` blit plus a
+   * single playhead line — no allocations.
+   *
+   * When `sections` is undefined or empty we still draw the dark background
+   * trough so the bar's screen real estate stays consistent.
+   */
+  #drawSectionScrollbar(
+    ctx: CanvasRenderingContext2D,
+    sections: readonly ChartSection[] | undefined,
+    songTimeMs: number,
+    songDurationMs: number,
+  ): void {
+    // Background trough — always drawn, even when there are no sections, so
+    // the scrollbar slot reads as "intentionally empty" rather than missing.
+    ctx.fillStyle = SECTION_BAR_BG;
+    ctx.fillRect(SECTION_BAR_X, SECTION_BAR_Y, SECTION_BAR_W, SECTION_BAR_H);
+
+    if (sections !== undefined && sections.length > 0 && songDurationMs > 0) {
+      const overlay = this.#getSectionOverlay(sections, songDurationMs);
+      if (overlay !== null) {
+        ctx.drawImage(overlay.canvas, SECTION_BAR_X, SECTION_BAR_Y);
+      }
+    }
+
+    // Outline.
+    ctx.strokeStyle = SECTION_BAR_OUTLINE;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(SECTION_BAR_X + 0.5, SECTION_BAR_Y + 0.5, SECTION_BAR_W - 1, SECTION_BAR_H - 1);
+
+    // Playhead.
+    if (songDurationMs > 0 && Number.isFinite(songDurationMs)) {
+      const frac = Math.max(0, Math.min(1, songTimeMs / songDurationMs));
+      const px = SECTION_BAR_X + frac * SECTION_BAR_W;
+      ctx.fillStyle = '#ffffff';
+      // Centre the 2 px wide playhead on the computed x.
+      ctx.fillRect(
+        px - SECTION_PLAYHEAD_W * 0.5,
+        SECTION_BAR_Y - 1,
+        SECTION_PLAYHEAD_W,
+        SECTION_BAR_H + 2,
+      );
+    }
+  }
+
+  /**
+   * Return (and lazily build) the cached section overlay. Invalidates when
+   * the sections array reference, song duration, or active palette epoch
+   * changes — none of which happen per frame in steady state.
+   */
+  #getSectionOverlay(
+    sections: readonly ChartSection[],
+    songDurationMs: number,
+  ): SectionOverlay | null {
+    const epoch = getPaletteEpoch();
+    const cached = this.#sectionOverlay;
+    if (
+      cached !== null &&
+      cached.sections === sections &&
+      cached.songDurationMs === songDurationMs &&
+      cached.paletteEpoch === epoch
+    ) {
+      return cached;
+    }
+
+    const { canvas, ctx } = createOverlayCanvas(SECTION_BAR_W, SECTION_BAR_H);
+    const palette = getActivePalette();
+    const rgb = parseRgbComponents(palette.spOverlay) ?? { r: 255, g: 255, b: 255 };
+
+    for (const section of sections) {
+      const startFrac = Math.max(0, Math.min(1, section.startMs / songDurationMs));
+      const endFrac = Math.max(0, Math.min(1, section.endMs / songDurationMs));
+      if (endFrac <= startFrac) continue;
+      const x0 = Math.floor(startFrac * SECTION_BAR_W);
+      const x1 = Math.ceil(endFrac * SECTION_BAR_W);
+      const w = Math.max(1, x1 - x0);
+      const intensity = Math.max(0, Math.min(1, section.intensity));
+      const alpha = SECTION_MIN_ALPHA + (SECTION_MAX_ALPHA - SECTION_MIN_ALPHA) * intensity;
+      ctx.fillStyle = `rgba(${rgb.r},${rgb.g},${rgb.b},${alpha.toFixed(3)})`;
+      ctx.fillRect(x0, 0, w, SECTION_BAR_H);
+    }
+
+    const overlay: SectionOverlay = {
+      canvas,
+      sections,
+      songDurationMs,
+      paletteEpoch: epoch,
+    };
+    this.#sectionOverlay = overlay;
+    return overlay;
   }
 
   // ---- Cache management -----------------------------------------------------

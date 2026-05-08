@@ -1,0 +1,187 @@
+/* Bongos Hero — Practice scene styles.
+ *
+ * Section + speed picker for "loop a hard passage" mode. Visual weight
+ * matches the song-select panel (.bh-songselect-*) so the two screens
+ * feel like siblings.
+ */
+
+.bh-practice {
+  position: absolute;
+  inset: 96px 8% 96px 8%;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  pointer-events: auto;
+  color: #f5f0e3;
+}
+
+.bh-practice-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  color: #f0e6ff;
+}
+
+.bh-practice-header h2 {
+  margin: 0;
+  font:
+    700 28px/1.1 Georgia,
+    'Times New Roman',
+    serif;
+  letter-spacing: 0.04em;
+  text-shadow: 0 0 16px rgba(196, 121, 255, 0.45);
+}
+
+.bh-practice-help {
+  color: rgba(245, 240, 227, 0.55);
+  font:
+    400 12px/1.4 'Segoe UI',
+    system-ui,
+    sans-serif;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.bh-practice-section-heading,
+.bh-practice-speed-heading {
+  font:
+    700 12px/1 'Segoe UI',
+    system-ui,
+    sans-serif;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(245, 240, 227, 0.7);
+  padding: 0 4px;
+}
+
+.bh-practice-sections {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  flex: 1 1 auto;
+  max-height: 40vh;
+  scrollbar-width: thin;
+  scrollbar-color: #5a2d77 transparent;
+  border-radius: 12px;
+  background: rgba(10, 6, 18, 0.35);
+  box-shadow: 0 0 24px rgba(196, 121, 255, 0.2);
+}
+
+.bh-practice-section {
+  appearance: none;
+  width: 100%;
+  text-align: left;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 14px;
+  align-items: center;
+  padding: 10px 14px;
+  border-radius: 8px;
+  background: rgba(20, 9, 30, 0.78);
+  border: 1px solid rgba(90, 45, 119, 0.6);
+  color: #f5f0e3;
+  font:
+    600 14px/1.2 'Segoe UI',
+    system-ui,
+    sans-serif;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.bh-practice-section:hover {
+  border-color: #c479ff;
+}
+
+.bh-practice-section.bh-active {
+  border-color: #ff62c2;
+  background: linear-gradient(180deg, rgba(60, 18, 70, 0.95) 0%, rgba(20, 9, 30, 0.95) 100%);
+  box-shadow:
+    0 0 14px rgba(255, 98, 194, 0.45),
+    inset 0 0 10px rgba(255, 98, 194, 0.18);
+}
+
+.bh-practice-section .bh-practice-section-idx {
+  font:
+    700 13px/1 'Courier New',
+    monospace;
+  color: rgba(196, 121, 255, 0.85);
+  min-width: 80px;
+}
+
+.bh-practice-section .bh-practice-section-range {
+  font:
+    600 14px/1 'Courier New',
+    monospace;
+  color: #f0e6ff;
+}
+
+.bh-practice-section .bh-practice-section-len {
+  font:
+    500 12px/1 'Segoe UI',
+    system-ui,
+    sans-serif;
+  color: rgba(245, 240, 227, 0.55);
+  min-width: 56px;
+  text-align: right;
+}
+
+.bh-practice-speeds {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: rgba(20, 12, 32, 0.55);
+  border: 1px solid rgba(196, 121, 255, 0.25);
+  border-radius: 10px;
+  flex-wrap: wrap;
+}
+
+.bh-practice-speed {
+  appearance: none;
+  border: 1px solid rgba(196, 121, 255, 0.45);
+  background: rgba(40, 22, 60, 0.6);
+  color: #f0e6ff;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font:
+    600 13px/1 'Segoe UI',
+    system-ui,
+    sans-serif;
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    transform 80ms ease;
+}
+
+.bh-practice-speed:hover {
+  background: rgba(60, 32, 90, 0.75);
+}
+
+.bh-practice-speed.bh-active {
+  background: linear-gradient(135deg, #c479ff 0%, #5ad7ff 100%);
+  border-color: rgba(255, 255, 255, 0.4);
+  color: #1a0d2e;
+  box-shadow: 0 0 16px rgba(196, 121, 255, 0.55);
+}
+
+.bh-practice-speed:focus-visible,
+.bh-practice-section:focus-visible {
+  outline: 2px solid #c479ff;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 5px rgba(196, 121, 255, 0.35);
+}
+
+.bh-practice-actions {
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+  padding-top: 4px;
+}

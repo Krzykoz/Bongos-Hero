@@ -15,7 +15,16 @@
  * past its `enter()`.
  */
 
-export type SceneId = 'title' | 'songSelect' | 'import' | 'play' | 'results' | 'calibration';
+export type SceneId =
+  | 'title'
+  | 'songSelect'
+  | 'import'
+  | 'play'
+  | 'results'
+  | 'calibration'
+  | 'settings'
+  | 'practice'
+  | 'rechart';
 
 export interface SceneContext {
   canvas: HTMLCanvasElement;

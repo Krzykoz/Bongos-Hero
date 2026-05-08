@@ -37,7 +37,7 @@ export const titleScene: Scene = {
     ensureBackground();
 
     titleHint = el('div', { className: 'bh-title-hint' }, [
-      'press SPACE for calibration  •  mash any LEFT / RIGHT key to start',
+      'press SPACE for calibration  •  S for settings  •  mash any LEFT / RIGHT key to start',
     ]);
     sceneCtx.overlay.appendChild(titleHint);
 
@@ -54,6 +54,14 @@ export const titleScene: Scene = {
       if (ev.code === 'Space') {
         ev.preventDefault();
         sceneCtx.navigate('calibration');
+        return;
+      }
+      // Settings shortcut MUST be checked before the mash-mode lane branch
+      // because `KeyS` is also a left-side key for the bongo input — without
+      // this guard pressing S would jump straight to song select.
+      if (ev.code === 'KeyS') {
+        ev.preventDefault();
+        sceneCtx.navigate('settings');
         return;
       }
       // Any left- or right-side key (the same set used by the mash-mode

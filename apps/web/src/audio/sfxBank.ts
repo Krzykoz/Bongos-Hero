@@ -20,6 +20,7 @@ export type SfxId =
   | 'hit-great'
   | 'hit-good'
   | 'miss'
+  | 'combo-break'
   | 'sp-activate'
   | 'metronome-tick';
 
@@ -77,6 +78,11 @@ const SAMPLE_SPECS: readonly SampleSpec[] = [
     id: 'miss',
     durationMs: 220,
     render: (buf, sr) => renderMiss(buf, sr),
+  },
+  {
+    id: 'combo-break',
+    durationMs: 280,
+    render: (buf, sr) => renderComboBreak(buf, sr),
   },
   {
     id: 'sp-activate',
@@ -223,6 +229,46 @@ function renderMiss(buf: Float32Array, sr: number): void {
     const env = Math.exp(-i / Math.max(1, sr * 0.12));
     const sweep = Math.sin(2 * Math.PI * freq * t);
     const s = sweep * env * 0.5 + prev * env * 0.4;
+    buf[i] = clipSoft(s);
+  }
+}
+
+/**
+ * "Combo-break" — a 280 ms downward trombone-fail wail. Layered on top of
+ * the lane-local 'miss' thump when the player drops a streak ≥ 10. Math:
+ *  - Fundamental: linear sweep 600 Hz → 150 Hz over the sample (matches
+ *    `renderMiss`'s linear sweep style).
+ *  - Body: 2nd harmonic (freq * 2) at 0.18 gain, with its own faster
+ *    exponential decay (`tau * 0.45`) so the brassy edge fades before the
+ *    fundamental — gives the "wah-wahhh" arc.
+ *  - Tail: dynamic one-pole low-pass (cutoff 1500 Hz, tightened to ~45%
+ *    of that by the end via `dynA = a * (1 - 0.55 * k)`) over a noise
+ *    source, mixed in at 0.3 gain for breath/buzz.
+ *  - Envelope: single exponential `exp(-i / (sr * 0.085))` ≈ 85 ms decay
+ *    constant — by 280 ms the level is exp(-280/85) ≈ 0.037.
+ *  - Soft-clipped via `clipSoft` so summed peaks stay below 1.0.
+ */
+function renderComboBreak(buf: Float32Array, sr: number): void {
+  const rng = mulberry32(0xb0bbed);
+  const cutoff = 1500;
+  const a = lpAlpha(cutoff, sr);
+  let prev = 0;
+  const totalMs = (buf.length / sr) * 1000;
+  const decayTau = sr * 0.085;
+  const harmTau = decayTau * 0.45;
+
+  for (let i = 0; i < buf.length; i++) {
+    const t = i / sr;
+    const tMs = t * 1000;
+    const k = Math.min(1, tMs / totalMs);
+    const freq = 600 + (150 - 600) * k;
+    const dynA = a * (1 - 0.55 * k);
+    const noise = rng() * 2 - 1;
+    prev = prev + dynA * (noise - prev);
+    const env = Math.exp(-i / decayTau);
+    const sweep = Math.sin(2 * Math.PI * freq * t);
+    const harm = Math.sin(2 * Math.PI * freq * 2 * t) * Math.exp(-i / harmTau) * 0.18;
+    const s = (sweep + harm) * env * 0.5 + prev * env * 0.3;
     buf[i] = clipSoft(s);
   }
 }

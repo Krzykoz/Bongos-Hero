@@ -2,7 +2,8 @@
  * Scoring engine for Bongos Hero.
  *
  * Handles judgment windows, combo/multiplier, Star-Power meter fill and
- * drain, and emits structured events for the HUD/SFX layer to react to.
+ * drain, sustain-note hold sessions, and emits structured events for the
+ * HUD/SFX layer to react to.
  *
  * Hot-path methods (`tick`, `pressBongo`) are designed to be allocation-
  * free in the steady state: the only objects created per call are the
@@ -10,7 +11,7 @@
  * when something interesting actually happens.
  */
 
-import type { Lane, Judgment } from '@bongos-hero/shared';
+import type { ChartNote, Lane, Judgment } from '@bongos-hero/shared';
 import { JUDGMENT_SCORE, JUDGMENT_WINDOW_MS } from '@bongos-hero/shared';
 
 import type { PreparedChart } from './chart.js';
@@ -26,6 +27,56 @@ const SP_ACTIVATION_THRESHOLD = 0.5;
 
 /** Total share of the SP meter awarded for cleanly completing one phrase. */
 const SP_PHRASE_FILL = 0.25;
+
+/** Starting level for the rock meter (Guitar-Hero-style fail bar). */
+const ROCK_METER_START = 0.5;
+
+/**
+ * Per-judgment delta applied to the rock meter on each resolution.
+ * Positive entries refill, negative entries drain. The meter is clamped
+ * to [0, 1] after every adjustment and a `'fail'` event fires the first
+ * time it touches zero.
+ */
+const ROCK_METER_DELTA = {
+  perfect: 0.04,
+  great: 0.025,
+  good: 0.01,
+  miss: -0.1,
+  /** Wrong-lane press inside the hit window. Also used for early sustain release. */
+  stray: -0.04,
+} as const;
+
+/**
+ * Window before a sustain's `expectedEndMs` in which a release still counts as
+ * a clean completion. Mirrors human reaction-time slack on a key-up.
+ */
+const SUSTAIN_GRACE_MS = 90;
+
+/** Score points awarded per second of cleanly-held sustain (pre-multipliers). */
+const SUSTAIN_SCORE_PER_SEC = 100;
+
+/**
+ * Active "hold session" for a sustain note. One per lane at most. Created
+ * on the press that resolves the sustain note; destroyed by `releaseBongo`
+ * (player let go) or by `tick` reaching `expectedEndMs` (player held long
+ * enough). Reads of `accumulatedMs` always see time the player ACTUALLY
+ * had the lane key down — pause time and time after `expectedEndMs` do
+ * not contribute.
+ */
+interface HoldSession {
+  noteIdx: number;
+  lane: Lane;
+  /** `nowMs` of the press that opened the session. */
+  startedAtMs: number;
+  /** `adjusted[noteIdx] + note.durMs` at open time; shifted by pause delta on resume. */
+  expectedEndMs: number;
+  /** Latest `nowMs` whose elapsed time has been folded into `accumulatedMs`. */
+  lastTickMs: number;
+  /** Held-time the player has accrued so far. Capped at `durMs` by the close logic. */
+  accumulatedMs: number;
+  /** Latched true if the player released early. Useful for telemetry / SFX. */
+  broken: boolean;
+}
 
 export interface ScoringSnapshot {
   score: number;
@@ -44,10 +95,31 @@ export interface ScoringSnapshot {
   /** Count of consumed notes (any judgment, including misses). */
   notesPlayed: number;
   notesTotal: number;
+  /** Guitar-Hero-style rock meter, 0..1, starts at 0.5. Empty = song fail. */
+  rockMeter: number;
+  /** True once the rock meter has hit 0; latched, never cleared. */
+  isFailed: boolean;
+  /**
+   * Currently-held sustains. The renderer reads this to decide which trails
+   * to paint as "actively held" (brighter tint).
+   *
+   * **Caller contract:** the returned array and its element objects are
+   * mutable buffers reused across snapshots. Read fields immediately; never
+   * cache the array, the elements, or any field across frames.
+   */
+  activeHolds: readonly { readonly lane: Lane; readonly remainingMs: number }[];
 }
 
 export interface ScoringEvent {
-  type: 'judgment' | 'stray' | 'sp-activated' | 'sp-depleted' | 'phrase-complete';
+  type:
+    | 'judgment'
+    | 'stray'
+    | 'sp-activated'
+    | 'sp-depleted'
+    | 'phrase-complete'
+    | 'fail'
+    | 'sustain-complete'
+    | 'sustain-broken';
   judgment?: Judgment;
   lane?: Lane;
   /** For 'judgment' on a real note. */
@@ -56,6 +128,8 @@ export interface ScoringEvent {
   deltaMs?: number;
   /** SP fill amount added (0..1) for 'phrase-complete'. */
   spDelta?: number;
+  /** Held-time in ms accrued for 'sustain-complete' / 'sustain-broken'. */
+  heldMs?: number;
   /** Song time when the event fired. */
   tMs: number;
 }
@@ -105,6 +179,24 @@ export class ScoringEngine {
    */
   private _spMeterAtActivation = 0;
 
+  // Rock meter (Guitar-Hero-style fail bar).
+  private _rockMeter = ROCK_METER_START;
+  private _isFailed = false;
+
+  // Active sustain holds — at most one per lane.
+  private _holdL: HoldSession | null = null;
+  private _holdR: HoldSession | null = null;
+
+  // Stable buffers for `snapshot().activeHolds` so per-frame snapshots don't
+  // allocate. `_holdSlots[0]` is for L, `[1]` for R; mutated in place each
+  // call to `snapshot()`. `_holdsView` is rebuilt by clearing length to 0 and
+  // pushing the active slots; in steady state this never grows the array.
+  private readonly _holdSlots = [
+    { lane: 'L' as Lane, remainingMs: 0 },
+    { lane: 'R' as Lane, remainingMs: 0 },
+  ];
+  private readonly _holdsView: { lane: Lane; remainingMs: number }[] = [];
+
   /**
    * Monotonic clamp for the tick clock. We never re-judge already-resolved
    * notes, so a backwards-going `nowMs` (e.g. clock jitter / debug seek)
@@ -112,6 +204,18 @@ export class ScoringEngine {
    * catches back up.
    */
   private _lastTickMs = -Infinity;
+
+  /**
+   * Set by `pause(nowMs)`, cleared by `resume(nowMs)`. While non-null,
+   * `tick` / `pressBongo` / `releaseBongo` / `activateStarPower` are no-ops,
+   * so the engine snapshot freezes (no auto-miss, no SP drain, no judging,
+   * no hold-time accrual) until resume. On resume we shift any active
+   * SP-activation timestamp AND every active hold's `lastTickMs` and
+   * `expectedEndMs` forward by the paused duration so SP duration and
+   * sustain end-times are preserved across the gap, regardless of whether
+   * the master clock is song-time or wall-clock anchored.
+   */
+  private _pausedAtMs: number | null = null;
 
   constructor(prepared: PreparedChart) {
     this.prepared = prepared;
@@ -140,15 +244,18 @@ export class ScoringEngine {
    * value. We never un-resolve a note or refill the SP meter.
    */
   tick(nowMs: number): void {
+    if (this._pausedAtMs !== null) return;
     const clamped = nowMs < this._lastTickMs ? this._lastTickMs : nowMs;
     this._lastTickMs = clamped;
 
     this._autoMissUpTo(clamped);
     this._drainSp(clamped);
+    this._tickHolds(clamped);
   }
 
   /** Process a bongo press. Internally calls `tick(nowMs)` first for safety. */
   pressBongo(lane: Lane, nowMs: number): void {
+    if (this._pausedAtMs !== null) return;
     this.tick(nowMs);
 
     const adjusted = this.prepared.noteTimesAdjustedMs;
@@ -195,6 +302,17 @@ export class ScoringEngine {
     if (bestSameIdx >= 0) {
       const judgment = this._classify(bestSameAbs);
       this._resolveNote(bestSameIdx, judgment, bestSameDelta, nowMs);
+
+      // If the note we just resolved is a sustain, open a hold session for
+      // its lane. A 'miss' classification means we never actually hit it
+      // (the press timing was a miss-equivalent), so don't open a hold.
+      if (judgment !== 'miss') {
+        const note = notes[bestSameIdx];
+        const durMs = note?.durMs ?? 0;
+        if (note !== undefined && durMs > 0) {
+          this._openHold(bestSameIdx, lane, nowMs, note);
+        }
+      }
       return;
     }
 
@@ -205,8 +323,25 @@ export class ScoringEngine {
     this._stray(lane, nowMs);
   }
 
+  /**
+   * Process a key-up for the given lane. Closes any active hold session
+   * for that lane (clean if at/past `expectedEndMs - SUSTAIN_GRACE_MS`,
+   * broken otherwise). No-op when no hold is active for the lane, or when
+   * the engine is paused. Safe to call any number of times; the first call
+   * with an active hold consumes it and subsequent calls are no-ops until
+   * the next press opens a new hold.
+   */
+  releaseBongo(lane: Lane, nowMs: number): void {
+    if (this._pausedAtMs !== null) return;
+    this.tick(nowMs);
+    const hold = lane === 'L' ? this._holdL : this._holdR;
+    if (hold === null) return;
+    this._closeHold(hold, nowMs);
+  }
+
   /** Activate Star-Power if the meter is at least 50%. No-op otherwise. */
   activateStarPower(nowMs: number): void {
+    if (this._pausedAtMs !== null) return;
     this.tick(nowMs);
     if (this._spActive) return;
     if (this._spMeter < SP_ACTIVATION_THRESHOLD) return;
@@ -218,11 +353,68 @@ export class ScoringEngine {
     this._emit({ type: 'sp-activated', tMs: nowMs });
   }
 
+  /**
+   * Snapshot the engine for a play-scene pause. Flushes any pending
+   * auto-miss / SP drain up to `nowMs`, then locks the engine: subsequent
+   * `tick` / `pressBongo` / `activateStarPower` calls are no-ops, and the
+   * snapshot reads stay frozen until `resume(...)`. Idempotent.
+   */
+  pause(nowMs: number): void {
+    if (this._pausedAtMs !== null) return;
+    this.tick(nowMs);
+    this._pausedAtMs = nowMs;
+  }
+
+  /**
+   * Resume from a previous `pause(...)`. Shifts the SP activation timestamp
+   * (and the monotonic tick watermark) forward by the paused duration so
+   * Star-Power duration is preserved across the gap. Safe to call when not
+   * paused (no-op).
+   */
+  resume(nowMs: number): void {
+    if (this._pausedAtMs === null) return;
+    const delta = nowMs - this._pausedAtMs;
+    this._pausedAtMs = null;
+    if (delta <= 0) return;
+    if (this._spActive) this._spStartedAtMs += delta;
+    if (this._lastTickMs !== -Infinity) this._lastTickMs += delta;
+    // Mirror the SP-freeze pattern for sustain holds: shift the hold's
+    // monotonic clock AND its expected end so the player isn't penalised
+    // for a key they couldn't have released while the engine was paused.
+    if (this._holdL !== null) {
+      this._holdL.lastTickMs += delta;
+      this._holdL.expectedEndMs += delta;
+    }
+    if (this._holdR !== null) {
+      this._holdR.lastTickMs += delta;
+      this._holdR.expectedEndMs += delta;
+    }
+  }
+
   /** Read-only HUD/renderer snapshot. Allocates one fresh object per call. */
   snapshot(): ScoringSnapshot {
     const baseMul = baseMultiplierForCombo(this._combo);
     const mul = this._spActive ? baseMul * 2 : baseMul;
     const remaining = this._spActive ? this._spMeter * SP_DURATION_MS : 0;
+
+    // Rebuild the activeHolds buffer in place. Length-zero + push reuses the
+    // backing storage in steady state (after the first frame the array
+    // capacity stabilises at ≤2). The slot objects are also reused across
+    // frames to avoid per-frame `{ lane, remainingMs }` allocation.
+    this._holdsView.length = 0;
+    const lastTick = this._lastTickMs === -Infinity ? 0 : this._lastTickMs;
+    if (this._holdL !== null) {
+      const slot = this._holdSlots[0]!;
+      slot.lane = 'L';
+      slot.remainingMs = Math.max(0, this._holdL.expectedEndMs - lastTick);
+      this._holdsView.push(slot);
+    }
+    if (this._holdR !== null) {
+      const slot = this._holdSlots[1]!;
+      slot.lane = 'R';
+      slot.remainingMs = Math.max(0, this._holdR.expectedEndMs - lastTick);
+      this._holdsView.push(slot);
+    }
 
     return {
       score: this._score,
@@ -241,6 +433,9 @@ export class ScoringEngine {
       consumed: this._consumed,
       notesPlayed: this._notesPlayed,
       notesTotal: this.prepared.totalNotes,
+      rockMeter: this._rockMeter,
+      isFailed: this._isFailed,
+      activeHolds: this._holdsView,
     };
   }
 
@@ -314,6 +509,7 @@ export class ScoringEngine {
     if (judgment === 'miss') {
       this._hitsMiss++;
       this._combo = 0;
+      this._adjustRockMeter(ROCK_METER_DELTA.miss, nowMs);
     } else {
       if (judgment === 'perfect') this._hitsPerfect++;
       else if (judgment === 'great') this._hitsGreat++;
@@ -329,6 +525,8 @@ export class ScoringEngine {
       this._score += Math.round(
         JUDGMENT_SCORE[judgment] * mul * this.prepared.difficultyMultiplier,
       );
+
+      this._adjustRockMeter(ROCK_METER_DELTA[judgment], nowMs);
 
       // SP fill: only "clean" judgments (perfect/great) contribute; good/miss don't.
       if (judgment === 'perfect' || judgment === 'great') {
@@ -397,7 +595,141 @@ export class ScoringEngine {
   /** Emit a stray-press event and reset combo. Does not consume any note. */
   private _stray(lane: Lane, nowMs: number): void {
     this._combo = 0;
+    this._adjustRockMeter(ROCK_METER_DELTA.stray, nowMs);
     this._emit({ type: 'stray', lane, tMs: nowMs });
+  }
+
+  /**
+   * Open a sustain hold session for `lane`. If a hold already exists for the
+   * lane (player double-pressed), the existing one is closed first using the
+   * current rules — typically that means broken (combo reset, rock penalty),
+   * since the new press almost always lands well before the previous hold's
+   * `expectedEndMs`.
+   */
+  private _openHold(noteIdx: number, lane: Lane, nowMs: number, note: ChartNote): void {
+    const existing = lane === 'L' ? this._holdL : this._holdR;
+    if (existing !== null) this._closeHold(existing, nowMs);
+
+    const adjusted = this.prepared.noteTimesAdjustedMs[noteIdx] ?? note.tMs;
+    const durMs = note.durMs ?? 0;
+    const hold: HoldSession = {
+      noteIdx,
+      lane,
+      startedAtMs: nowMs,
+      expectedEndMs: adjusted + durMs,
+      lastTickMs: nowMs,
+      accumulatedMs: 0,
+      broken: false,
+    };
+    if (lane === 'L') this._holdL = hold;
+    else this._holdR = hold;
+  }
+
+  /**
+   * Per-tick maintenance of any active hold sessions. For each open hold:
+   *   - if `nowMs >= expectedEndMs`, auto-close as a clean completion (the
+   *     player held long enough; they get full credit even without a release).
+   *   - otherwise accrue `(nowMs - lastTickMs)` into `accumulatedMs` and
+   *     advance `lastTickMs`.
+   */
+  private _tickHolds(nowMs: number): void {
+    if (this._holdL !== null) {
+      if (nowMs >= this._holdL.expectedEndMs) {
+        this._closeHold(this._holdL, nowMs);
+      } else if (nowMs > this._holdL.lastTickMs) {
+        this._holdL.accumulatedMs += nowMs - this._holdL.lastTickMs;
+        this._holdL.lastTickMs = nowMs;
+      }
+    }
+    if (this._holdR !== null) {
+      if (nowMs >= this._holdR.expectedEndMs) {
+        this._closeHold(this._holdR, nowMs);
+      } else if (nowMs > this._holdR.lastTickMs) {
+        this._holdR.accumulatedMs += nowMs - this._holdR.lastTickMs;
+        this._holdR.lastTickMs = nowMs;
+      }
+    }
+  }
+
+  /**
+   * Close an open hold session at `nowMs`. Shared between the explicit
+   * release path, the tick auto-close path, and the open-while-already-held
+   * defence in `_openHold`. Idempotent on the active-hold slot pointer
+   * (clears it after running).
+   *
+   * Award rules:
+   *   - clean (`nowMs >= expectedEndMs - SUSTAIN_GRACE_MS`): combo is
+   *     maintained; score += round(100 * heldSec * comboMul * spMul *
+   *     difficultyMul). SP fill is unchanged (sustain credit is independent
+   *     of the SP-phrase share system).
+   *   - broken (early release): combo → 0; rock meter takes the same hit as
+   *     a stray press (-0.04). The player still keeps any score awarded
+   *     for the original `pressBongo` judgment — they just forfeit the
+   *     sustain bonus and the streak.
+   */
+  private _closeHold(hold: HoldSession, nowMs: number): void {
+    // Cap accrual at expectedEndMs even if the player held past it. Time
+    // beyond the note's `durMs` is not worth more points.
+    const cap = nowMs < hold.expectedEndMs ? nowMs : hold.expectedEndMs;
+    if (cap > hold.lastTickMs) {
+      hold.accumulatedMs += cap - hold.lastTickMs;
+      hold.lastTickMs = cap;
+    }
+
+    const isClean = nowMs >= hold.expectedEndMs - SUSTAIN_GRACE_MS;
+
+    if (isClean) {
+      const baseMul = baseMultiplierForCombo(this._combo);
+      const mul = this._spActive ? baseMul * 2 : baseMul;
+      const points = Math.round(
+        SUSTAIN_SCORE_PER_SEC *
+          (hold.accumulatedMs / 1000) *
+          mul *
+          this.prepared.difficultyMultiplier,
+      );
+      this._score += points;
+      this._emit({
+        type: 'sustain-complete',
+        lane: hold.lane,
+        noteIndex: hold.noteIdx,
+        heldMs: hold.accumulatedMs,
+        tMs: nowMs,
+      });
+    } else {
+      hold.broken = true;
+      this._combo = 0;
+      this._adjustRockMeter(ROCK_METER_DELTA.stray, nowMs);
+      this._emit({
+        type: 'sustain-broken',
+        lane: hold.lane,
+        noteIndex: hold.noteIdx,
+        heldMs: hold.accumulatedMs,
+        tMs: nowMs,
+      });
+    }
+
+    if (hold.lane === 'L') this._holdL = null;
+    else this._holdR = null;
+  }
+
+  /**
+   * Apply a delta to the rock meter, clamped into [0, 1]. The first time
+   * the meter falls from a positive value to zero, latch `_isFailed` and
+   * emit a one-shot `'fail'` event. Once failed we never re-emit, even if
+   * subsequent hits temporarily refill the meter and another miss drops
+   * it back to zero.
+   */
+  private _adjustRockMeter(delta: number, nowMs: number): void {
+    const prev = this._rockMeter;
+    let next = prev + delta;
+    if (next < 0) next = 0;
+    else if (next > 1) next = 1;
+    this._rockMeter = next;
+
+    if (!this._isFailed && next === 0 && prev > 0) {
+      this._isFailed = true;
+      this._emit({ type: 'fail', tMs: nowMs });
+    }
   }
 
   /** Map an absolute timing delta to a judgment. */

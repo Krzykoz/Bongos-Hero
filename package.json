@@ -20,6 +20,10 @@
     "typecheck:shared": "npm --workspace @bongos-hero/shared run typecheck",
     "typecheck:server": "npm --workspace @bongos-hero/server run typecheck",
     "typecheck:web": "npm --workspace @bongos-hero/web run typecheck",
+    "test": "npm-run-all --serial test:shared test:server test:web",
+    "test:shared": "npm --workspace @bongos-hero/shared run test",
+    "test:server": "npm --workspace @bongos-hero/server run test",
+    "test:web": "npm --workspace @bongos-hero/web run test",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
@@ -33,9 +37,13 @@
     "npm-run-all": "^4.1.5",
     "prettier": "^3.8.3",
     "typescript": "^5.6.3",
-    "typescript-eslint": "^8.59.2"
+    "typescript-eslint": "^8.59.2",
+    "vitest": "^2.1.9"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "playwright": "^1.59.1"
   }
 }

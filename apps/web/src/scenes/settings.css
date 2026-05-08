@@ -1,0 +1,325 @@
+/* Bongos Hero — Settings scene styles.
+ *
+ * Scoped under .bh-set-* class names. Visual weight matches the calibration
+ * card (.bh-cal-*) so the two adjacent screens feel like siblings.
+ */
+
+.bh-set-wrap {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: auto;
+}
+
+.bh-set-card {
+  width: min(520px, 92vw);
+  padding: 32px 36px;
+  background: linear-gradient(180deg, rgba(28, 12, 44, 0.95) 0%, rgba(16, 6, 25, 0.95) 100%);
+  border: 1px solid #5a2d77;
+  border-radius: 16px;
+  color: #f5f0e3;
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.75),
+    0 0 32px rgba(196, 121, 255, 0.3);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.bh-set-card h2 {
+  margin: 0;
+  font:
+    700 28px/1.1 Georgia,
+    'Times New Roman',
+    serif;
+  letter-spacing: 0.04em;
+  color: #f0e6ff;
+  text-shadow: 0 0 16px rgba(196, 121, 255, 0.45);
+  text-align: center;
+}
+
+.bh-set-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.bh-set-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  background: rgba(10, 6, 18, 0.6);
+  border: 1px solid #3a1d4e;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.bh-set-row-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.bh-set-label-text {
+  font:
+    600 13px/1.2 'Segoe UI',
+    system-ui,
+    sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(245, 240, 227, 0.75);
+}
+
+.bh-set-readout {
+  font:
+    700 16px/1.1 'Courier New',
+    monospace;
+  color: #f0e6ff;
+  letter-spacing: 0.04em;
+}
+
+.bh-set-slider {
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  background: linear-gradient(90deg, #c479ff 0%, #ff62c2 100%);
+  border-radius: 999px;
+  outline: none;
+  cursor: pointer;
+}
+
+.bh-set-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #f5f0e3;
+  border: 2px solid #c479ff;
+  box-shadow: 0 0 10px rgba(196, 121, 255, 0.6);
+  cursor: pointer;
+}
+
+.bh-set-slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #f5f0e3;
+  border: 2px solid #c479ff;
+  box-shadow: 0 0 10px rgba(196, 121, 255, 0.6);
+  cursor: pointer;
+}
+
+.bh-set-slider:focus-visible {
+  outline: 2px solid #c479ff;
+  outline-offset: 4px;
+}
+
+.bh-set-row-toggle {
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.bh-set-checkbox {
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid #5a2d77;
+  background: #0a0612;
+  cursor: pointer;
+  display: inline-grid;
+  place-items: center;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    background 120ms ease;
+}
+
+.bh-set-checkbox:hover {
+  border-color: #c479ff;
+}
+
+.bh-set-checkbox:checked {
+  background: linear-gradient(135deg, #c479ff 0%, #ff62c2 100%);
+  border-color: rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 12px rgba(196, 121, 255, 0.55);
+}
+
+.bh-set-checkbox:checked::after {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: #1a0d2e;
+}
+
+.bh-set-checkbox:focus-visible {
+  outline: 2px solid #c479ff;
+  outline-offset: 3px;
+}
+
+.bh-set-hint {
+  font:
+    500 13px/1.4 'Segoe UI',
+    system-ui,
+    sans-serif;
+  color: rgba(245, 240, 227, 0.6);
+  text-align: center;
+  letter-spacing: 0.04em;
+}
+
+.bh-set-keys-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: rgba(10, 6, 18, 0.6);
+  border: 1px solid #3a1d4e;
+  border-radius: 10px;
+}
+
+.bh-set-section-heading {
+  font:
+    700 14px/1.2 'Segoe UI',
+    system-ui,
+    sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #f0e6ff;
+}
+
+.bh-set-section-sub {
+  font:
+    500 12px/1.4 'Segoe UI',
+    system-ui,
+    sans-serif;
+  color: rgba(245, 240, 227, 0.55);
+  margin-bottom: 4px;
+}
+
+.bh-set-row-keys {
+  cursor: default;
+  gap: 10px;
+}
+
+.bh-set-key-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 28px;
+}
+
+.bh-set-key-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px 3px 8px;
+  background: rgba(196, 121, 255, 0.12);
+  border: 1px solid #5a2d77;
+  border-radius: 6px;
+}
+
+.bh-set-key-kbd {
+  font:
+    600 12px/1 'Courier New',
+    monospace;
+  color: #f0e6ff;
+  letter-spacing: 0.04em;
+}
+
+.bh-set-key-remove {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: rgba(245, 240, 227, 0.7);
+  font:
+    700 14px/1 'Segoe UI',
+    system-ui,
+    sans-serif;
+  cursor: pointer;
+  padding: 0 4px;
+  border-radius: 4px;
+  transition:
+    color 120ms ease,
+    background 120ms ease;
+}
+
+.bh-set-key-remove:hover:not(:disabled) {
+  color: #fff;
+  background: rgba(255, 98, 194, 0.3);
+}
+
+.bh-set-key-remove:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.bh-set-key-add {
+  appearance: none;
+  align-self: flex-start;
+  padding: 6px 12px;
+  background: linear-gradient(135deg, #c479ff 0%, #ff62c2 100%);
+  color: #1a0d2e;
+  border: none;
+  border-radius: 8px;
+  font:
+    700 12px/1.1 'Segoe UI',
+    system-ui,
+    sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease,
+    filter 120ms ease;
+}
+
+.bh-set-key-add:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(196, 121, 255, 0.4);
+}
+
+.bh-set-key-add-listening {
+  background: linear-gradient(135deg, #ffd166 0%, #ff62c2 100%);
+  animation: bh-set-key-pulse 1s ease-in-out infinite;
+}
+
+@keyframes bh-set-key-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 209, 102, 0.7);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(255, 209, 102, 0);
+  }
+}
+
+.bh-set-key-reset {
+  appearance: none;
+  padding: 4px 10px;
+  background: transparent;
+  color: rgba(245, 240, 227, 0.75);
+  border: 1px solid #5a2d77;
+  border-radius: 6px;
+  font:
+    600 11px/1.1 'Segoe UI',
+    system-ui,
+    sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    border-color 120ms ease,
+    background 120ms ease;
+}
+
+.bh-set-key-reset:hover {
+  color: #f0e6ff;
+  border-color: #c479ff;
+  background: rgba(196, 121, 255, 0.12);
+}

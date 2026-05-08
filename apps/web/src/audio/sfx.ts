@@ -4,7 +4,13 @@
  *
  * One-shots are allowed (and expected) to overlap, so each `play()` builds a
  * fresh `AudioBufferSourceNode` and lets the GC collect it after `onended`.
+ *
+ * The engine self-subscribes to the user settings store at construction so
+ * SFX volume changes propagate live without callers having to wire anything
+ * up.
  */
+
+import { subscribe as subscribeSettings } from '../settings/index.js';
 
 export interface SfxEngineOptions {
   ctx: AudioContext;
@@ -30,6 +36,12 @@ export class SfxEngine {
     this._master = this._ctx.createGain();
     this._master.gain.value = opts.volume ?? 1;
     this._master.connect(this._ctx.destination);
+    // Self-subscribe so SFX volume changes propagate live. `subscribe`
+    // invokes synchronously with the current settings, which seeds the
+    // master gain to the persisted value (overriding `opts.volume`).
+    subscribeSettings((s) => {
+      this.setMasterVolume(s.sfxVolume);
+    });
   }
 
   /** Loads a one-shot sample by id. Resolves once decoded. */
@@ -90,9 +102,10 @@ export class SfxEngine {
     src.start();
   }
 
-  /** Sets master volume. Values outside [0, 1] are accepted; caller's risk. */
+  /** Sets master volume, clamped to [0, 1]. */
   setMasterVolume(v: number): void {
     if (!Number.isFinite(v)) return;
-    this._master.gain.value = v;
+    const clamped = Math.max(0, Math.min(1, v));
+    this._master.gain.value = clamped;
   }
 }
