@@ -31,6 +31,15 @@ import { ScoringEngine, type ScoringEvent } from '../game/scoring.js';
 import { type PreparedChart, prepareChart } from '../game/chart.js';
 import { loadDifficulty } from '../game/difficulty.js';
 import { KeyboardInput, type InputEvent } from '../input/keyboard.js';
+import { startGamepadInput, type GamepadInputHandle } from '../input/gamepad.js';
+import {
+  isTouchDevice,
+  makeCanvasHitTest,
+  mountTouchZones,
+  startTouchInput,
+  type TouchInputHandle,
+  type TouchZoneHandle,
+} from '../input/touch.js';
 import { laneForCode } from '../input/sides.js';
 import { HighwayRenderer } from '../render/highway.js';
 import { NotesRenderer } from '../render/notes.js';
@@ -82,6 +91,9 @@ interface PlayState {
   audio: AudioEngine | null;
   sfx: SfxBank | null;
   input: KeyboardInput | null;
+  gamepad: GamepadInputHandle | null;
+  touch: TouchInputHandle | null;
+  touchZones: TouchZoneHandle | null;
   scoring: ScoringEngine | null;
   background: BackgroundRenderer;
   highway: HighwayRenderer;
@@ -134,6 +146,9 @@ function makeInitialState(songId: string, difficulty: Difficulty): PlayState {
     audio: null,
     sfx: null,
     input: null,
+    gamepad: null,
+    touch: null,
+    touchZones: null,
     scoring: null,
     background: new BackgroundRenderer(),
     highway: new HighwayRenderer(),
@@ -347,6 +362,12 @@ function quitToSongSelect(sceneCtx: SceneContext, s: PlayState): void {
   s.audio?.stop();
   s.youtube?.stop();
   s.input?.detach();
+  s.gamepad?.dispose();
+  s.gamepad = null;
+  s.touch?.dispose();
+  s.touch = null;
+  s.touchZones?.dispose();
+  s.touchZones = null;
   sceneCtx.navigate('songSelect');
 }
 
@@ -566,6 +587,49 @@ export const playScene: Scene = {
     s.input = input;
     s.unsubscribers.push(input.on((ev) => handleInputEvent(s, ev)));
 
+    // Gamepad input runs in parallel with the keyboard layer. Standard
+    // controller bumpers (L1 / R1) and bottom-row face buttons drive the
+    // L / R lanes via the same scoring API. Lane release respects the
+    // keyboard's held set: a sustain stays armed while EITHER input layer
+    // is still holding the lane.
+    s.gamepad = startGamepadInput({
+      onLanePress: (lane) => {
+        if (state !== s) return;
+        if (s.phase !== 'playing') return;
+        s.scoring?.pressBongo(lane, getMasterClockMs(s));
+      },
+      onLaneRelease: (lane) => {
+        if (state !== s) return;
+        if (s.input?.isLanePressed(lane) === true) return;
+        s.scoring?.releaseBongo(lane, getMasterClockMs(s));
+      },
+    });
+
+    // Touch input — only on touch-capable devices (mobile / hybrid laptops).
+    // Mounts two on-screen tap-zone hints in #overlay and listens for
+    // pointer events on the canvas. The hitTest converts client coords
+    // into canvas-logical (1280×720) space, accounting for CSS scaling
+    // AND portrait rotation, then returns 'L' / 'R' / null. Lane press +
+    // release semantics mirror the keyboard + gamepad layers: a sustain
+    // stays armed while ANY input layer still holds the lane.
+    if (isTouchDevice()) {
+      s.touchZones = mountTouchZones(sceneCtx.overlay);
+      s.touch = startTouchInput({
+        target: sceneCtx.canvas,
+        hitTest: makeCanvasHitTest(sceneCtx.canvas),
+        onLanePress: (lane) => {
+          if (state !== s) return;
+          if (s.phase !== 'playing') return;
+          s.scoring?.pressBongo(lane, getMasterClockMs(s));
+        },
+        onLaneRelease: (lane) => {
+          if (state !== s) return;
+          if (s.input?.isLanePressed(lane) === true) return;
+          s.scoring?.releaseBongo(lane, getMasterClockMs(s));
+        },
+      });
+    }
+
     // Local document-level keydown for pause-overlay actions and a fallback
     // for Escape during count-in.
     onKeyDown = (ev: KeyboardEvent): void => {
@@ -673,6 +737,12 @@ export const playScene: Scene = {
       }
       state.unsubscribers.length = 0;
       state.input?.detach();
+      state.gamepad?.dispose();
+      state.gamepad = null;
+      state.touch?.dispose();
+      state.touch = null;
+      state.touchZones?.dispose();
+      state.touchZones = null;
       state.audio?.stop();
       disposeYouTube(state);
       state = null;

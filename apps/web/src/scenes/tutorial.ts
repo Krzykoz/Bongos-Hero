@@ -32,6 +32,15 @@ import './scenes.css';
 import { ScoringEngine, type ScoringEvent } from '../game/scoring.js';
 import { prepareChart, type PreparedChart } from '../game/chart.js';
 import { KeyboardInput, type InputEvent } from '../input/keyboard.js';
+import { startGamepadInput, type GamepadInputHandle } from '../input/gamepad.js';
+import {
+  isTouchDevice,
+  makeCanvasHitTest,
+  mountTouchZones,
+  startTouchInput,
+  type TouchInputHandle,
+  type TouchZoneHandle,
+} from '../input/touch.js';
 import { laneForCode } from '../input/sides.js';
 import { BackgroundRenderer } from '../render/background.js';
 import { HighwayRenderer } from '../render/highway.js';
@@ -107,6 +116,9 @@ interface State {
   prepared: PreparedChart;
   scoring: ScoringEngine;
   input: KeyboardInput;
+  gamepad: GamepadInputHandle | null;
+  touch: TouchInputHandle | null;
+  touchZones: TouchZoneHandle | null;
   background: BackgroundRenderer;
   highway: HighwayRenderer;
   notes: NotesRenderer;
@@ -217,6 +229,9 @@ export const tutorialScene: Scene = {
       prepared,
       scoring: new ScoringEngine(prepared),
       input: null as unknown as KeyboardInput, // wired immediately below
+      gamepad: null,
+      touch: null,
+      touchZones: null,
       background,
       highway: new HighwayRenderer(),
       notes,
@@ -238,6 +253,44 @@ export const tutorialScene: Scene = {
     );
     s.unsubscribers.push(s.input.on((ev) => handleInputEvent(s, ev)));
     s.input.attach();
+
+    // Gamepad input — runs alongside the keyboard layer. Same lane semantics:
+    // a press fires `pressBongo`; a release only fires `releaseBongo` if the
+    // keyboard isn't still holding the lane (a sustain stays armed while
+    // either input layer holds the lane).
+    s.gamepad = startGamepadInput({
+      onLanePress: (lane) => {
+        if (state !== s || s.exited) return;
+        s.scoring.pressBongo(lane, getMasterClockMs(s));
+      },
+      onLaneRelease: (lane) => {
+        if (state !== s) return;
+        if (s.input.isLanePressed(lane)) return;
+        s.scoring.releaseBongo(lane, getMasterClockMs(s));
+      },
+    });
+
+    // Touch input — only on touch-capable devices. Mounts two on-screen
+    // tap-zone hints in #overlay and listens for pointer events on the
+    // canvas. The hitTest converts client coords into canvas-logical
+    // coords, accounting for CSS scaling AND portrait rotation. Lane
+    // press / release semantics mirror the keyboard + gamepad layers.
+    if (isTouchDevice()) {
+      s.touchZones = mountTouchZones(sceneCtx.overlay);
+      s.touch = startTouchInput({
+        target: sceneCtx.canvas,
+        hitTest: makeCanvasHitTest(sceneCtx.canvas),
+        onLanePress: (lane) => {
+          if (state !== s || s.exited) return;
+          s.scoring.pressBongo(lane, getMasterClockMs(s));
+        },
+        onLaneRelease: (lane) => {
+          if (state !== s) return;
+          if (s.input.isLanePressed(lane)) return;
+          s.scoring.releaseBongo(lane, getMasterClockMs(s));
+        },
+      });
+    }
 
     // Esc → exit tutorial back to title (replaces the play scene's pause
     // action). Defensive: ignore keystrokes inside text-entry surfaces in
@@ -326,6 +379,12 @@ export const tutorialScene: Scene = {
       }
       state.unsubscribers.length = 0;
       state.input.detach();
+      state.gamepad?.dispose();
+      state.gamepad = null;
+      state.touch?.dispose();
+      state.touch = null;
+      state.touchZones?.dispose();
+      state.touchZones = null;
       state = null;
     }
     currentSceneCtx = null;

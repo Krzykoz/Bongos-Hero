@@ -88,12 +88,20 @@ body {
 }
 
 #game {
-  position: relative;
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   z-index: 1;
   width: min(100vw, calc(100vh * 16 / 9));
   height: min(100vh, calc(100vw * 9 / 16));
   outline: none;
   display: block;
+  /* Suppress the browser's default touch behaviours (scroll/zoom/pan) so
+     pointer events on the canvas drive lane hits cleanly. */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 #overlay {
@@ -105,4 +113,100 @@ body {
 
 #overlay > * {
   pointer-events: auto;
+}
+
+/* ---- Portrait orientation ---------------------------------------------- *
+ * When window.innerHeight > innerWidth, main.ts toggles `bh-portrait` on
+ * <body>. The canvas + YouTube background rotate 90° clockwise around their
+ * own centres so the player can hold their phone in portrait and tilt it
+ * clockwise to play in landscape orientation. The elements are sized so
+ * that AFTER rotation the bounding box fits the viewport (their
+ * pre-rotation width / height swap, which is why the CSS sizing formulas
+ * swap vw / vh in the portrait ruleset).
+ *
+ * The touch hitTest in input/touch.ts reads the same `bh-portrait` class
+ * to un-rotate client coords back to canvas-local space, so taps land in
+ * the correct lane regardless of orientation.
+ *
+ * The HTML overlay (#overlay) keeps its viewport-aligned `inset: 0`
+ * geometry — DOM widgets like the pause / loading / song-select panels
+ * use viewport-relative positioning and stay readable when tilted because
+ * most are centred. Players in active gameplay primarily interact via the
+ * canvas-rendered highway and the rotated tap zones below, both of which
+ * track the canvas's logical orientation. */
+body.bh-portrait #yt-bg,
+body.bh-portrait #game {
+  width: min(100vh, calc(100vw * 16 / 9));
+  height: min(100vw, calc(100vh * 9 / 16));
+  transform: translate(-50%, -50%) rotate(90deg);
+}
+
+/* ---- Tap zones (touch devices only) ------------------------------------ *
+ * Visual hints positioned at the bottom-left / bottom-right of the canvas
+ * letterbox. They are pointer-events:none so the canvas continues to
+ * receive the actual pointerdown events; the touch input layer's hitTest
+ * decides which lane was struck based on canvas-local coordinates.
+ *
+ * Sizing matches the canvas letterbox: each zone is half the canvas width
+ * (which is `min(100vw, calc(100vh * 16/9))`) and 40% of canvas height,
+ * pinned to the canvas's bottom edge inside the centred letterbox. The
+ * play / tutorial scene appends one of each to #overlay only on
+ * touch-capable devices (see isTouchDevice() in input/touch.ts) — on
+ * desktop they are never mounted so the hint visuals never appear. */
+.bh-touch-zone {
+  position: absolute;
+  bottom: max(0px, calc((100vh - min(100vh, calc(100vw * 9 / 16))) / 2));
+  width: calc(min(100vw, calc(100vh * 16 / 9)) / 2);
+  height: calc(min(100vh, calc(100vw * 9 / 16)) * 0.4);
+  pointer-events: none;
+  display: grid;
+  place-items: center;
+  font:
+    700 clamp(36px, 8vmin, 96px) / 1 Georgia,
+    'Times New Roman',
+    serif;
+  color: rgba(245, 240, 227, 0.22);
+  background: rgba(255, 255, 255, 0.04);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  text-shadow: 0 0 24px rgba(0, 0, 0, 0.6);
+  letter-spacing: 0.08em;
+  z-index: 3;
+}
+
+.bh-touch-zone-l {
+  left: max(0px, calc((100vw - min(100vw, calc(100vh * 16 / 9))) / 2));
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 0 16px 0 0;
+}
+
+.bh-touch-zone-r {
+  right: max(0px, calc((100vw - min(100vw, calc(100vh * 16 / 9))) / 2));
+  border-radius: 16px 0 0 0;
+}
+
+/* Portrait: the canvas is rotated 90° CW, so its logical-bottom (where
+ * the tap zones live) projects onto the viewport's LEFT edge. Re-pin the
+ * zones along that left band, splitting it into top (R) and bottom (L)
+ * halves so a player tilting the phone clockwise reads them in the
+ * familiar bottom-left = L, bottom-right = R positions. */
+body.bh-portrait .bh-touch-zone {
+  bottom: auto;
+  width: calc(min(100vw, calc(100vh * 9 / 16)) * 0.4);
+  height: calc(min(100vh, calc(100vw * 16 / 9)) / 2);
+  border-top: none;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+body.bh-portrait .bh-touch-zone-l {
+  left: max(0px, calc((100vw - min(100vw, calc(100vh * 9 / 16))) / 2));
+  bottom: max(0px, calc((100vh - min(100vh, calc(100vw * 16 / 9))) / 2));
+  top: auto;
+  border-radius: 0 16px 16px 0;
+}
+
+body.bh-portrait .bh-touch-zone-r {
+  left: max(0px, calc((100vw - min(100vw, calc(100vh * 9 / 16))) / 2));
+  right: auto;
+  top: max(0px, calc((100vh - min(100vh, calc(100vw * 16 / 9))) / 2));
+  border-radius: 0 16px 16px 0;
 }
