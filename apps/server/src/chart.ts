@@ -1,4 +1,4 @@
-import type { ChartNote, ChartSection, ChartV1, Lane } from '@bongos-hero/shared';
+import type { ChartNote, ChartSection, ChartV1, Difficulty, Lane } from '@bongos-hero/shared';
 
 import type { FeatureSet, OnsetFeature } from './audioFeatures.js';
 
@@ -118,6 +118,43 @@ export interface BuildChartOptions {
   rmsFloor?: number;
   /** Mark every Nth note as Star Power. Default 12. */
   spEveryN?: number;
+  /**
+   * Quantize note onsets to the detected BPM beat-grid. Subdivisions per beat:
+   * 1 = quarter-note grid, 4 = 16th-note grid (default), 8 = 32nd-note grid.
+   * Pass 0 to disable snapping. No-op when BPM is not detected.
+   */
+  snapDivisions?: number;
+  /**
+   * Maximum distance (ms) from a grid line within which an onset is pulled to
+   * the grid. Onsets farther than this (genuine syncopation, fills) are left
+   * at their original tMs. Default 35.
+   */
+  snapToleranceMs?: number;
+  /**
+   * Difficulty the chart is being built for. Drives the per-section thinning
+   * pass: when `'easy'` or `'medium'`, low-intensity sections (intros, outros,
+   * breakdowns) are sparsified per `verseKeepRatio`. When `'hard'` or omitted
+   * the per-section pass is skipped entirely (the on-disk chart is always the
+   * full Hard chart, mirroring the client-side `DIFFICULTY_CONFIG` flow).
+   */
+  difficulty?: Difficulty;
+  /**
+   * Sections with `intensity > chorusIntensityThreshold` are considered
+   * chorus-like and keep all notes. Default 0.65.
+   */
+  chorusIntensityThreshold?: number;
+  /**
+   * Sections with `intensity > verseIntensityThreshold` (but ≤ chorus) are
+   * considered verse-like and keep all notes; sections at or below this
+   * threshold are sparsified per `verseKeepRatio`. Default 0.30.
+   */
+  verseIntensityThreshold?: number;
+  /**
+   * Fraction of droppable notes preserved in low-intensity sections (those
+   * with `intensity ≤ verseIntensityThreshold`). 1.0 disables per-section
+   * thinning entirely. Default 0.70 (drop every 3rd droppable, ≈67% kept).
+   */
+  verseKeepRatio?: number;
 }
 
 /**
@@ -136,6 +173,36 @@ export interface ChartTunables {
   minSpacingMs?: number;
   /** Spectral-centroid Hz threshold separating low (L) from high (R). */
   centroidThreshold?: number;
+  /**
+   * Beat-grid snap subdivisions per beat: 1 = quarter-note grid, 4 = 16th-note
+   * grid, 8 = 32nd-note grid. Pass 0 to disable snapping entirely. No-op when
+   * BPM is not detected (fewer than 8 kept onsets).
+   */
+  snapDivisions?: number;
+  /**
+   * Maximum distance (ms) from a grid line within which an onset is pulled to
+   * the grid. Onsets farther than this stay at their original time so that
+   * deliberate syncopation and human-played fills survive the quantizer.
+   */
+  snapToleranceMs?: number;
+  /**
+   * Sections with `intensity > chorusIntensityThreshold` are treated as
+   * chorus-like by the per-section thinning pass and keep all their notes.
+   */
+  chorusIntensityThreshold?: number;
+  /**
+   * Sections with `intensity ≤ verseIntensityThreshold` are treated as
+   * intro/outro/breakdown-like and sparsified per `verseKeepRatio`. Sections
+   * between this threshold and `chorusIntensityThreshold` are verse-like and
+   * keep all notes.
+   */
+  verseIntensityThreshold?: number;
+  /**
+   * Fraction of droppable notes preserved in low-intensity sections. 1.0
+   * disables per-section thinning entirely. The pass only fires when
+   * `BuildChartOptions.difficulty` is `'easy'` or `'medium'`.
+   */
+  verseKeepRatio?: number;
 }
 
 /**
@@ -149,6 +216,11 @@ export const DEFAULT_TUNABLES: Required<ChartTunables> = {
   rmsFloor: 0.005,
   minSpacingMs: 90,
   centroidThreshold: 1500,
+  snapDivisions: 4,
+  snapToleranceMs: 35,
+  chorusIntensityThreshold: 0.65,
+  verseIntensityThreshold: 0.3,
+  verseKeepRatio: 0.7,
 };
 
 function classifyLane(
@@ -279,6 +351,92 @@ function clamp01(v: number): number {
   return v;
 }
 
+// ---- Per-section difficulty thinning ----------------------------------------
+//
+// After detection + sustain tagging + section detection the chart still has
+// the full Hard density everywhere. Per-section thinning lowers the note
+// count *only* in low-intensity sections (intros, outros, breakdowns) so the
+// gap between a quiet bridge and a loud chorus reads on the highway.
+//
+// Deterministic walk: within each low-intensity section we drop every Nth
+// "droppable" note, where N = round(1 / (1 - verseKeepRatio)) clamped ≥ 2.
+// SP-tagged notes and sustains are unconditionally preserved (and do *not*
+// advance the droppable counter), so dropping never hides a phrase boundary
+// or a long hold the player is meant to see.
+
+/** Difficulties that opt in to the per-section thinning pass. */
+const PER_SECTION_THINNING_DIFFICULTIES: ReadonlySet<Difficulty> = new Set<Difficulty>([
+  'easy',
+  'medium',
+]);
+
+function applyPerSectionThinning(
+  notes: ChartNote[],
+  sections: readonly ChartSection[] | undefined,
+  difficulty: Difficulty | undefined,
+  chorusIntensityThreshold: number,
+  verseIntensityThreshold: number,
+  verseKeepRatio: number,
+): ChartNote[] {
+  if (notes.length === 0) return notes;
+  if (sections === undefined || sections.length === 0) return notes;
+  if (difficulty === undefined || !PER_SECTION_THINNING_DIFFICULTIES.has(difficulty)) {
+    return notes;
+  }
+  if (verseKeepRatio >= 1) return notes;
+
+  const denom = Math.max(1e-6, 1 - verseKeepRatio);
+  const dropEveryN = Math.max(2, Math.round(1 / denom));
+
+  const kept: ChartNote[] = [];
+  let secIdx = 0;
+  let droppableInSection = 0;
+
+  for (const note of notes) {
+    while (secIdx < sections.length && note.tMs >= sections[secIdx]!.endMs) {
+      secIdx++;
+      droppableInSection = 0;
+    }
+    if (secIdx >= sections.length) {
+      kept.push(note);
+      continue;
+    }
+    const section = sections[secIdx]!;
+    if (note.tMs < section.startMs) {
+      kept.push(note);
+      continue;
+    }
+
+    const intensity = section.intensity;
+    let multiplier: number;
+    if (intensity > chorusIntensityThreshold) {
+      multiplier = 1; // chorus — keep all notes
+    } else if (intensity > verseIntensityThreshold) {
+      multiplier = 1; // verse / mid — keep all notes
+    } else {
+      multiplier = verseKeepRatio; // intro / outro / breakdown — sparsify
+    }
+    if (multiplier >= 1) {
+      kept.push(note);
+      continue;
+    }
+
+    if (note.sp === true || (note.durMs !== undefined && note.durMs > 0)) {
+      kept.push(note);
+      continue;
+    }
+
+    const idx = droppableInSection;
+    droppableInSection++;
+    if (idx % dropEveryN === dropEveryN - 1) {
+      continue;
+    }
+    kept.push(note);
+  }
+
+  return kept;
+}
+
 /**
  * Build a `ChartV1` from extracted onset features.
  *
@@ -296,6 +454,21 @@ export function buildChart(opts: BuildChartOptions, tunables?: ChartTunables): C
     tuned?.centroidThreshold ?? opts.centroidSplitHz ?? DEFAULT_TUNABLES.centroidThreshold;
   const rmsFloor = tuned?.rmsFloor ?? opts.rmsFloor ?? DEFAULT_TUNABLES.rmsFloor;
   const spEveryN = opts.spEveryN ?? 12;
+  const snapDivisions =
+    tuned?.snapDivisions ?? opts.snapDivisions ?? DEFAULT_TUNABLES.snapDivisions;
+  const snapToleranceMs =
+    tuned?.snapToleranceMs ?? opts.snapToleranceMs ?? DEFAULT_TUNABLES.snapToleranceMs;
+  const chorusIntensityThreshold =
+    tuned?.chorusIntensityThreshold ??
+    opts.chorusIntensityThreshold ??
+    DEFAULT_TUNABLES.chorusIntensityThreshold;
+  const verseIntensityThreshold =
+    tuned?.verseIntensityThreshold ??
+    opts.verseIntensityThreshold ??
+    DEFAULT_TUNABLES.verseIntensityThreshold;
+  const verseKeepRatio =
+    tuned?.verseKeepRatio ?? opts.verseKeepRatio ?? DEFAULT_TUNABLES.verseKeepRatio;
+  const difficulty = opts.difficulty;
 
   // 1. Drop low-RMS onsets.
   const loud: OnsetFeature[] = opts.features.features.filter((f) => f.rms >= rmsFloor);
@@ -377,23 +550,54 @@ export function buildChart(opts: BuildChartOptions, tunables?: ChartTunables): C
     return note;
   });
 
-  // 8. Final sort by tMs (already sorted, but be defensive).
+  // 7b. Beat-grid snap. With cellMs = beatMs / snapDivisions, each note's tMs
+  //     is pulled to the nearest grid line iff it is within snapToleranceMs.
+  //     Onsets farther than the tolerance keep their original tMs so deliberate
+  //     syncopation / human-played fills survive. No-op when bpm is undefined
+  //     (fewer than 8 kept onsets) or snapDivisions is 0.
+  if (bpm !== undefined && snapDivisions > 0) {
+    const beatMs = 60_000 / bpm;
+    const cellMs = beatMs / snapDivisions;
+    if (cellMs > 0 && Number.isFinite(cellMs)) {
+      for (const note of notes) {
+        const nearest = Math.round(note.tMs / cellMs) * cellMs;
+        if (Math.abs(nearest - note.tMs) <= snapToleranceMs) {
+          note.tMs = Math.round(nearest);
+        }
+      }
+    }
+  }
+
+  // 8. Final sort by tMs (already sorted, but be defensive — snap can shift
+  //    adjacent onsets in opposite directions on dense passages).
   notes.sort((a, b) => a.tMs - b.tMs);
 
   // 9. Sustain detection — runs after the final sort so the same-lane "next
   //    onset" lookup walks the same ordering downstream consumers see.
   detectSustains(notes, opts.features.features, rmsFloor);
 
-  const chart: ChartV1 = {
-    version: 1,
-    audioOffsetMs: 0,
-    notes,
-  };
-  if (bpm !== undefined) chart.bpm = bpm;
-
   // 10. Section detection over the full feature set (pre-min-spacing) so a
   //     quiet but onset-dense bridge is not misclassified as low intensity.
   const sections = detectSections(opts.features.features, opts.features.durationSec);
+
+  // 11. Per-section thinning — sparsify low-intensity sections when difficulty
+  //     opts in. SP and sustain notes are unconditionally preserved so phrase
+  //     boundaries and held notes survive any density reduction.
+  const finalNotes = applyPerSectionThinning(
+    notes,
+    sections,
+    difficulty,
+    chorusIntensityThreshold,
+    verseIntensityThreshold,
+    verseKeepRatio,
+  );
+
+  const chart: ChartV1 = {
+    version: 1,
+    audioOffsetMs: 0,
+    notes: finalNotes,
+  };
+  if (bpm !== undefined) chart.bpm = bpm;
   if (sections !== undefined) chart.sections = sections;
 
   return chart;

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import type { ChartNote, ChartSection } from '@bongos-hero/shared';
+
 import type { FeatureSet, OnsetFeature } from '../audioFeatures.js';
 import { buildChart, DEFAULT_TUNABLES } from '../chart.js';
 
@@ -403,6 +405,11 @@ describe('buildChart tunables', () => {
       rmsFloor: 0.005,
       minSpacingMs: 90,
       centroidThreshold: 1500,
+      snapDivisions: 4,
+      snapToleranceMs: 35,
+      chorusIntensityThreshold: 0.65,
+      verseIntensityThreshold: 0.3,
+      verseKeepRatio: 0.7,
     });
   });
 
@@ -491,5 +498,251 @@ describe('buildChart tunables', () => {
     // for 0.1 (drops the 0.02 onset). Tunables must win.
     const chart = buildChart({ features: set(features), rmsFloor: 0.005 }, { rmsFloor: 0.1 });
     expect(chart.notes.map((n) => n.tMs)).toEqual([0, 600]);
+  });
+});
+
+/**
+ * Behavioral coverage for the beat-grid snap pass (step 7b in `buildChart`).
+ *
+ * Each test builds a feature set with ≥8 strictly-alternating L/R onsets so
+ * BPM is detected, then asserts how a deliberately off-grid note survives or
+ * gets pulled to the nearest grid line.
+ */
+describe('buildChart beat-grid snap', () => {
+  /**
+   * Build N strictly L/R-alternating onsets at `times` (seconds). Padded with
+   * extra onsets at `padStart + i*0.5` (so median IOI = 0.5 s → BPM 120) until
+   * we have at least 8 entries — enough for BPM detection to engage.
+   */
+  function bpm120Features(targetTimesSec: number[], padStart = 10): OnsetFeature[] {
+    const features: OnsetFeature[] = [];
+    let i = 0;
+    for (const t of targetTimesSec) {
+      features.push(feat({ tSec: t, stereoBalance: i % 2 === 0 ? -0.8 : 0.8 }));
+      i++;
+    }
+    while (features.length < 10) {
+      features.push(
+        feat({
+          tSec: padStart + (features.length - targetTimesSec.length) * 0.5,
+          stereoBalance: features.length % 2 === 0 ? -0.8 : 0.8,
+        }),
+      );
+    }
+    return features;
+  }
+
+  it('snaps onsets within tolerance to the nearest 16th-note grid line', () => {
+    // BPM 120 → beatMs = 500, cellMs = 500/4 = 125. The 16th-note grid lines
+    // around 500 ms are at 375 / 500 / 625. Onsets at 502 ms (2 ms off) and
+    // 504 ms (4 ms off) both snap to 500 ms.
+    const featuresA = bpm120Features([0.0, 0.502, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5]);
+    const chartA = buildChart({ features: set(featuresA) });
+    expect(chartA.bpm).toBe(120);
+    expect(chartA.notes[1]!.tMs).toBe(500);
+
+    const featuresB = bpm120Features([0.0, 0.504, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5]);
+    const chartB = buildChart({ features: set(featuresB) });
+    expect(chartB.bpm).toBe(120);
+    expect(chartB.notes[1]!.tMs).toBe(500);
+  });
+
+  it('leaves onsets outside the tolerance untouched', () => {
+    // BPM 120, cellMs = 125. An onset at 540 ms is 40 ms off the nearest cell
+    // (500 ms) — beyond the 35 ms default tolerance — so it stays at 540 ms.
+    const features = bpm120Features([0.0, 0.54, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5]);
+    const chart = buildChart({ features: set(features) });
+    expect(chart.bpm).toBe(120);
+    expect(chart.notes[1]!.tMs).toBe(540);
+  });
+
+  it('is a no-op when bpm is undefined (fewer than 8 kept onsets)', () => {
+    // Three onsets → bpm not estimated → snap pass must not engage. The
+    // off-grid 502 ms onset must survive unchanged.
+    const chart = buildChart({
+      features: set([
+        feat({ tSec: 0.0, stereoBalance: -0.8 }),
+        feat({ tSec: 0.502, stereoBalance: 0.8 }),
+        feat({ tSec: 1.0, stereoBalance: -0.8 }),
+      ]),
+    });
+    expect(chart.bpm).toBeUndefined();
+    expect(chart.notes.map((n) => n.tMs)).toEqual([0, 502, 1000]);
+  });
+
+  it('disables snap entirely when snapDivisions is 0', () => {
+    // Same off-grid 502 ms onset as the 16th-note test, but with snap turned
+    // off via tunables.snapDivisions = 0 — the onset stays at 502 ms.
+    const features = bpm120Features([0.0, 0.502, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5]);
+    const chart = buildChart({ features: set(features) }, { snapDivisions: 0 });
+    expect(chart.bpm).toBe(120);
+    expect(chart.notes[1]!.tMs).toBe(502);
+  });
+
+  it('snaps to the quarter-note grid when snapDivisions is 1', () => {
+    // BPM 120 → beatMs = 500, cellMs = 500/1 = 500. An onset at 498 ms is 2 ms
+    // off the nearest quarter-grid cell (500 ms) → snaps to 500 ms.
+    const features = bpm120Features([0.0, 0.498, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5]);
+    const chart = buildChart({ features: set(features) }, { snapDivisions: 1 });
+    expect(chart.bpm).toBe(120);
+    expect(chart.notes[1]!.tMs).toBe(500);
+  });
+
+  it('exposes snapDivisions=4 and snapToleranceMs=35 as the default tunables', () => {
+    // Regression guard for the documented defaults — anything that quietly
+    // changes them would silently rewrite every imported chart.
+    expect(DEFAULT_TUNABLES.snapDivisions).toBe(4);
+    expect(DEFAULT_TUNABLES.snapToleranceMs).toBe(35);
+  });
+});
+
+/**
+ * Behavioral coverage for the per-section difficulty thinning pass. Each test
+ * builds a 60 s chart with a clear high-RMS chorus followed by a low-RMS
+ * intro/outro-like section, then asserts how the per-section pass interacts
+ * with `BuildChartOptions.difficulty` and the new `verseKeepRatio` knob.
+ */
+describe('buildChart per-section difficulty', () => {
+  /**
+   * Helper: 60 s song with high RMS for the first 30 s (chorus-like) and a
+   * very low RMS (just above `rmsFloor` 0.005, below the sustain detector's
+   * 0.0075 high-RMS threshold) for the second 30 s. Onsets every 0.5 s with
+   * strict L/R alternation, so all 120 onsets survive lane + min-spacing
+   * filtering and BPM lands cleanly on 120.
+   */
+  function highLowFeatures(): FeatureSet {
+    const features: OnsetFeature[] = [];
+    let i = 0;
+    for (let t = 0; t < 60; t += 0.5) {
+      const rms = t < 30 ? 0.5 : 0.006;
+      features.push(
+        feat({
+          tSec: t,
+          rms,
+          stereoBalance: i % 2 === 0 ? -0.8 : 0.8,
+        }),
+      );
+      i++;
+    }
+    return { sampleRate: 22050, durationSec: 60, channelCount: 2, features };
+  }
+
+  /**
+   * Like `highLowFeatures` but injects a single high-RMS "ghost" feature
+   * 50 ms after the 30.5 s low onset. The default 90 ms min-spacing filter
+   * drops the ghost from the chart, but the sustain detector still sees it
+   * inside the inner-window of the L note at tMs=30000 — marking that one
+   * low-section note as a sustain so we can exercise sustain protection.
+   */
+  function highLowWithSustainFeatures(): FeatureSet {
+    const fs = highLowFeatures();
+    const features = [...fs.features, feat({ tSec: 30.55, rms: 0.5, stereoBalance: 0.8 })];
+    features.sort((a, b) => a.tSec - b.tSec);
+    return { ...fs, features };
+  }
+
+  function notesIn(notes: readonly ChartNote[], section: ChartSection): ChartNote[] {
+    return notes.filter((n) => n.tMs >= section.startMs && n.tMs < section.endMs);
+  }
+
+  it('thins notes only in low-intensity sections, leaving choruses untouched', () => {
+    const fs = highLowFeatures();
+    const baseline = buildChart({ features: fs, difficulty: 'hard' });
+    const easy = buildChart({ features: fs, difficulty: 'easy' });
+
+    const sections = baseline.sections!;
+    expect(sections.length).toBeGreaterThanOrEqual(2);
+    const high = sections[0]!;
+    const low = sections[sections.length - 1]!;
+    expect(high.intensity).toBeGreaterThan(0.65);
+    expect(low.intensity).toBeLessThanOrEqual(0.3);
+
+    // Chorus section: same count as the unthinned baseline.
+    expect(notesIn(easy.notes, high).length).toBe(notesIn(baseline.notes, high).length);
+
+    // Low section: kept ratio sits near verseKeepRatio 0.7 (drop every 3rd
+    // droppable ⇒ ~67%). Allow ±0.15 slack to absorb the SP/sustain
+    // protection adjustment and section-boundary placement.
+    const baseLow = notesIn(baseline.notes, low).length;
+    const easyLow = notesIn(easy.notes, low).length;
+    expect(baseLow).toBeGreaterThan(0);
+    const ratio = easyLow / baseLow;
+    expect(ratio).toBeGreaterThanOrEqual(0.55);
+    expect(ratio).toBeLessThanOrEqual(0.85);
+  });
+
+  it('keeps every note when verseKeepRatio is 1.0 (per-section thinning disabled)', () => {
+    const fs = highLowFeatures();
+    const baseline = buildChart({ features: fs, difficulty: 'hard' });
+    const easyDisabled = buildChart({ features: fs, difficulty: 'easy', verseKeepRatio: 1.0 });
+    expect(easyDisabled.notes.length).toBe(baseline.notes.length);
+    for (let i = 0; i < baseline.notes.length; i++) {
+      expect(easyDisabled.notes[i]!.tMs).toBe(baseline.notes[i]!.tMs);
+    }
+  });
+
+  it('preserves SP-tagged notes in low-intensity sections under aggressive thinning', () => {
+    const fs = highLowFeatures();
+    const baseline = buildChart({ features: fs, difficulty: 'hard' });
+    // verseKeepRatio 0.1 collapses to "drop every other droppable" (clamped
+    // to N=2) — the strongest low-section thinning the function will apply.
+    const aggressive = buildChart({ features: fs, difficulty: 'easy', verseKeepRatio: 0.1 });
+
+    const sections = baseline.sections!;
+    const low = sections[sections.length - 1]!;
+    const baseSp = notesIn(baseline.notes, low).filter((n) => n.sp === true);
+    const aggSp = notesIn(aggressive.notes, low).filter((n) => n.sp === true);
+
+    expect(baseSp.length).toBeGreaterThan(0);
+    expect(aggSp.length).toBe(baseSp.length);
+    expect(aggSp.map((n) => n.tMs)).toEqual(baseSp.map((n) => n.tMs));
+
+    // Sanity: non-SP notes in the same low section were thinned dramatically.
+    const baseNonSp = notesIn(baseline.notes, low).filter((n) => n.sp !== true);
+    const aggNonSp = notesIn(aggressive.notes, low).filter((n) => n.sp !== true);
+    expect(aggNonSp.length).toBeLessThan(baseNonSp.length);
+  });
+
+  it('preserves sustain-tagged notes in low-intensity sections under aggressive thinning', () => {
+    const fs = highLowWithSustainFeatures();
+    const baseline = buildChart({ features: fs, difficulty: 'hard' });
+    const aggressive = buildChart({ features: fs, difficulty: 'easy', verseKeepRatio: 0.1 });
+
+    const sections = baseline.sections!;
+    const low = sections[sections.length - 1]!;
+    const baseSustains = notesIn(baseline.notes, low).filter(
+      (n) => n.durMs !== undefined && n.durMs > 0,
+    );
+    const aggSustains = notesIn(aggressive.notes, low).filter(
+      (n) => n.durMs !== undefined && n.durMs > 0,
+    );
+
+    expect(baseSustains.length).toBeGreaterThan(0);
+    expect(aggSustains.length).toBe(baseSustains.length);
+    expect(aggSustains.map((n) => n.tMs)).toEqual(baseSustains.map((n) => n.tMs));
+  });
+
+  it("difficulty: 'hard' skips per-section thinning entirely (low section keeps 100%)", () => {
+    const fs = highLowFeatures();
+    const noDifficulty = buildChart({ features: fs });
+    const hard = buildChart({ features: fs, difficulty: 'hard' });
+
+    expect(hard.notes.length).toBe(noDifficulty.notes.length);
+    for (let i = 0; i < hard.notes.length; i++) {
+      expect(hard.notes[i]!.tMs).toBe(noDifficulty.notes[i]!.tMs);
+    }
+    // And the low-section count matches the unthinned baseline exactly.
+    const sections = hard.sections!;
+    const low = sections[sections.length - 1]!;
+    expect(notesIn(hard.notes, low).length).toBe(notesIn(noDifficulty.notes, low).length);
+  });
+
+  it('exposes the per-section thresholds and verseKeepRatio via DEFAULT_TUNABLES', () => {
+    // Regression guard for the documented defaults so `verseKeepRatio: 1.0`
+    // remains a reliable "off switch" and the chorus/verse breakpoints stay
+    // in lockstep with the spec.
+    expect(DEFAULT_TUNABLES.chorusIntensityThreshold).toBe(0.65);
+    expect(DEFAULT_TUNABLES.verseIntensityThreshold).toBe(0.3);
+    expect(DEFAULT_TUNABLES.verseKeepRatio).toBe(0.7);
   });
 });
