@@ -33,6 +33,9 @@ import {
 import type { Scene, SceneContext } from '../router.js';
 import { el, fmtNumber } from './dom.js';
 import { BackgroundRenderer } from '../render/background.js';
+import { EffectsRenderer } from '../render/effects.js';
+import { STAGE_H, STAGE_W } from '../render/geom.js';
+import { SfxEngine } from '../audio/sfx.js';
 
 interface ResultsPayload {
   songMeta: SongMeta | null;
@@ -59,12 +62,59 @@ let payloadCache: ResultsPayload | null = null;
 const COUNT_UP_DURATION_MS = 1500;
 const AUTO_ADVANCE_SECONDS = 8;
 
+/**
+ * Tiered celebration state — owned by the results scene only.
+ *
+ * `effects` is reused across enters so the confetti pool is allocated once
+ * for the lifetime of the page; `clear()` on enter wipes any stragglers
+ * from a previous result. `sfxEngine` + `audioCtx` are lazy because the
+ * AudioContext constructor is forbidden until after a user gesture (the
+ * results scene only ever runs *after* the player has clicked through
+ * play, so this is always safe by the time `enter()` fires).
+ */
+let effects: EffectsRenderer | null = null;
+let sfxEngine: SfxEngine | null = null;
+let audioCtx: AudioContext | null = null;
+
+interface WebkitAudioCtxWindow {
+  AudioContext?: typeof AudioContext;
+  webkitAudioContext?: typeof AudioContext;
+}
+
 function ensureBackground(): BackgroundRenderer {
   if (!bg) {
     bg = new BackgroundRenderer();
     bg.setBpm(120);
   }
   return bg;
+}
+
+function ensureEffects(): EffectsRenderer {
+  effects ??= new EffectsRenderer();
+  return effects;
+}
+
+/**
+ * Lazily build the scene-local `SfxEngine` for the stinger / fail-beat
+ * synthesis. Returns null and warns once if the AudioContext can't be
+ * constructed (Safari before a gesture, or an environment without Web
+ * Audio at all) — the visuals still play, the audio just doesn't.
+ */
+function ensureSfxEngine(): SfxEngine | null {
+  if (sfxEngine) return sfxEngine;
+  try {
+    if (!audioCtx) {
+      const w = globalThis as unknown as WebkitAudioCtxWindow;
+      const Ctor = w.AudioContext ?? w.webkitAudioContext;
+      if (!Ctor) return null;
+      audioCtx = new Ctor();
+    }
+    sfxEngine = new SfxEngine({ ctx: audioCtx });
+    return sfxEngine;
+  } catch (err) {
+    console.warn('[results] SfxEngine unavailable; tiered SFX skipped:', err);
+    return null;
+  }
 }
 
 function computeAccuracy(s: ScoringSnapshot): number {
@@ -417,7 +467,36 @@ export const resultsScene: Scene = {
     }
 
     root = el('div', { className: 'bh-results' }, [card]);
+    if (failed) {
+      root.classList.add('bh-results-muted');
+    }
     sceneCtx.overlay.appendChild(root);
+
+    // ---- Tiered celebration ---------------------------------------------
+    //
+    // Branch on the result tier:
+    //   - 5★      → cannons confetti + celebratory stinger
+    //   - 4★      → small centre confetti burst, no stinger
+    //   - failed  → sympathetic low fail-beat + muted-screen tint (CSS class
+    //               `bh-results-muted` applied above)
+    //   - 1-3★    → unchanged, no extra feedback
+    //
+    // The visual confetti pool is reused across enters; calling `clear()`
+    // here drops any stragglers from a previous result so each scene-enter
+    // gets a fresh-looking burst. The SfxEngine is built lazily inside
+    // ensureSfxEngine() and respects the user's sfxVolume setting via
+    // the per-key registration the SfxEngine constructor performs.
+    const fx = ensureEffects();
+    fx.clear();
+    const celebrationNowMs = performance.now();
+    if (failed) {
+      ensureSfxEngine()?.playFailBeat();
+    } else if (stars === 5) {
+      fx.spawnConfettiFor5Star({ width: STAGE_W, height: STAGE_H }, celebrationNowMs);
+      ensureSfxEngine()?.playStinger();
+    } else if (stars === 4) {
+      fx.spawnSmallBurstFor4Star({ width: STAGE_W, height: STAGE_H }, celebrationNowMs);
+    }
 
     onKeyDown = (ev: KeyboardEvent): void => {
       const target = ev.target;
@@ -479,6 +558,12 @@ export const resultsScene: Scene = {
       root.remove();
       root = null;
     }
+    // Drop any confetti that survived the scene exit so the next enter
+    // starts from an empty pool. The renderer instance itself is kept so
+    // the confetti pool's preallocated slots are reused.
+    if (effects) {
+      effects.clear();
+    }
     scoreEl = null;
     payloadCache = null;
     void sceneCtx;
@@ -486,6 +571,12 @@ export const resultsScene: Scene = {
 
   draw(sceneCtx: SceneContext, nowMs: number): void {
     ensureBackground().draw(sceneCtx.ctx, { nowMs });
+    // Confetti renders on the canvas, behind the DOM card overlay (the
+    // DOM #overlay sits above the canvas in z-order, so the celebration
+    // never occludes the score / buttons).
+    if (effects) {
+      effects.draw(sceneCtx.ctx, { nowMs });
+    }
 
     if (!scoreEl || !payloadCache) return;
     const elapsed = performance.now() - countUpStartMs;

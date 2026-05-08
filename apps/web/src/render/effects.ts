@@ -1,7 +1,7 @@
 /**
  * Visual effects layer for the Bongos Hero highway.
  *
- * Owns five families of feedback:
+ * Owns seven families of feedback:
  *   1. Hit bursts        — radial particle pop + expanding white "tap ring"
  *      when a note is judged perfect/great/good.
  *   2. Miss flashes      — translucent red rectangle over the failed lane,
@@ -13,6 +13,15 @@
  *      play scene at score thresholds.
  *   5. Star Power banner — diagonal "STAR POWER!" sweep across the stage when
  *      SP is activated, plus a translucent screen-blended cyan beam.
+ *   6. Combo milestones  — distinct centred flourishes (radial wave +
+ *      optional edge-glow pulse + optional gold "COMBO N!" text) when the
+ *      player crosses 25 / 50 / 100+ combo thresholds. Pool of 4 fixed
+ *      slots — rare effect, no per-frame allocation.
+ *   7. Confetti          — gravity-driven rectangular particles fired from
+ *      the results scene on a 5★ (cannons) or 4★ (centre burst) outcome.
+ *      Pool of {@link MAX_CONFETTI} preallocated slots — never allocates
+ *      per frame, including no per-particle `fillStyle` string assembly
+ *      (palette colours are pre-stringified at module init).
  *
  * Plus a screen-shake bus: misses push impulses, the play scene reads the
  * current offset every frame and translates the highway+notes layer (NOT the
@@ -35,7 +44,7 @@
 import type { Lane, Judgment } from '@bongos-hero/shared';
 
 import { laneCenterX, progressToY, STAGE_H, STAGE_W } from './geom.js';
-import { THEME } from './theme.js';
+import { getActivePalette, THEME } from './theme.js';
 
 // ---- Tunables ---------------------------------------------------------------
 
@@ -147,6 +156,87 @@ const COMIC_PALETTES: readonly ComicPalette[] = [
 const COMIC_FALLBACK_WORD = 'BONK!';
 const COMIC_FALLBACK_PALETTE: ComicPalette = { fill: '#ffd23f', inner: '#fff48a' };
 
+/**
+ * Combo-milestone keyframes. Three flavors share the radial wave; `super`
+ * adds a screen-edge alpha pulse, `legend` adds the edge pulse plus the
+ * gold "COMBO N!" centre text. Pool is fixed-size so the per-frame draw
+ * never allocates.
+ */
+const MILESTONE_POOL_SIZE = 4;
+/** Wave duration (basic). Also the lower bound for the other flavors. */
+const MILESTONE_WAVE_MS = 800;
+/** Edge-glow pulse duration (super + legend). */
+const MILESTONE_EDGE_MS = 1000;
+/** Centre-text duration (legend only). Pop-in / hold / fade spans this total. */
+const MILESTONE_TEXT_MS = 1100;
+/** Wave geometry: ring expands from R0 to R1 over MILESTONE_WAVE_MS. */
+const MILESTONE_WAVE_R0 = 60;
+const MILESTONE_WAVE_R1 = 460;
+const MILESTONE_WAVE_LINE_PX = 6;
+const MILESTONE_WAVE_ALPHA0 = 0.7;
+/** Width (px) of each side-edge alpha bar drawn by `super` / `legend`. */
+const MILESTONE_EDGE_WIDTH_PX = 110;
+/** Peak alpha at the midpoint of the edge pulse (envelope is 0→peak→0). */
+const MILESTONE_EDGE_PEAK_ALPHA = 0.4;
+/** Legend-flavor centre-text font size. */
+const MILESTONE_TEXT_PX = 96;
+const MILESTONE_TEXT_Y = STAGE_H * 0.5;
+/** Text pop-in / hold / fade keyframes (sum = MILESTONE_TEXT_MS). */
+const MILESTONE_TEXT_POPIN_MS = 160;
+const MILESTONE_TEXT_HOLD_MS = 600;
+const MILESTONE_TEXT_FADE_MS = 340;
+
+// ---- Confetti tunables ------------------------------------------------------
+
+/**
+ * Hard ceiling for live confetti rectangles. Sized for the worst case the
+ * results scene throws at the renderer (a 5★ outcome fires ~50 from two
+ * cannons; 80 leaves headroom for back-to-back results without recycling
+ * mid-fall).
+ */
+const MAX_CONFETTI = 80;
+
+/** Confetti particle lifetime, in ms. */
+const CONFETTI_LIFETIME_MS = 2400;
+
+/** Gravity (px/s²). Strong enough to make the cannons rain down inside ~2 s. */
+const CONFETTI_GRAVITY_PX_S2 = 700;
+
+/** Initial speed range, px/s. */
+const CONFETTI_SPEED_MIN = 380;
+const CONFETTI_SPEED_MAX = 720;
+
+/** Rectangle size range, px (stage-space). */
+const CONFETTI_SIZE_MIN = 6;
+const CONFETTI_SIZE_MAX = 12;
+
+/** Rotation velocity range (rad/s). Half spin to two full spins per second. */
+const CONFETTI_ROT_VEL_MIN = -Math.PI * 4;
+const CONFETTI_ROT_VEL_MAX = Math.PI * 4;
+
+/**
+ * Confetti palette — pre-stringified `#rrggbb` colors. Mixed warm + cool so
+ * the burst reads as celebratory regardless of which lane palette is active.
+ * Picked once per particle at spawn time; no per-frame string allocation.
+ */
+const CONFETTI_COLORS: readonly string[] = [
+  '#ffd23f', // gold
+  '#ff5cf0', // magenta
+  '#5be8ff', // cyan
+  '#5ad7ff', // sky
+  '#fff48a', // pale gold
+  '#c479ff', // violet
+  '#ff8a5c', // coral
+  '#7cffb1', // mint
+];
+
+/** Spawn fan half-angle (rad) — how wide each cannon sprays around its aim. */
+const CONFETTI_FAN_HALF_RAD = Math.PI / 4;
+
+/** Particle counts for the two scene-level helpers. */
+const CONFETTI_5_STAR_COUNT = 50;
+const CONFETTI_4_STAR_COUNT = 20;
+
 // ---- Particle pool ----------------------------------------------------------
 
 interface Particle {
@@ -198,6 +288,54 @@ interface ComicBurst {
   tiltRad: number;
 }
 
+/**
+ * Combo-milestone flourish. One pool entry per slot — `active=false` means
+ * the slot is free. Three flavors stack visuals: `basic` is wave only,
+ * `super` adds an edge pulse, `legend` adds wave + edge + gold centre text.
+ */
+export type MilestoneFlavor = 'basic' | 'super' | 'legend';
+
+export interface Milestone {
+  active: boolean;
+  startMs: number;
+  /** Threshold value that triggered the spawn (25 / 50 / 100 / 150 / …). */
+  combo: number;
+  flavor: MilestoneFlavor;
+}
+
+/**
+ * Confetti particle pool slot. `active=false` means the slot is free.
+ *
+ * Position / velocity are stage-space (1280×720); `rotation` is radians and
+ * advances by `rotationVel` per second. `color` is a pre-stringified
+ * `#rrggbb` literal from {@link CONFETTI_COLORS} — picked at spawn so the
+ * draw loop never has to assemble an `rgba(...)` string per particle.
+ */
+export interface ConfettiParticle {
+  active: boolean;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  rotation: number;
+  rotationVel: number;
+  color: string;
+  size: number;
+  spawnedAtMs: number;
+  lifetimeMs: number;
+}
+
+/**
+ * Total visible lifetime of a milestone, derived from its flavor — the
+ * draw pass uses this to retire the slot back to `active=false`.
+ */
+function milestoneLifeMs(flavor: MilestoneFlavor): number {
+  if (flavor === 'basic') return MILESTONE_WAVE_MS;
+  if (flavor === 'super') return Math.max(MILESTONE_WAVE_MS, MILESTONE_EDGE_MS);
+  // legend: longest of the three pieces.
+  return Math.max(MILESTONE_WAVE_MS, MILESTONE_EDGE_MS, MILESTONE_TEXT_MS);
+}
+
 // Hit-burst tuning per judgment.
 interface HitSpec {
   count: number;
@@ -239,6 +377,20 @@ export class EffectsRenderer {
   readonly #starBanners: StarPowerBanner[] = [];
   readonly #comicBursts: ComicBurst[] = [];
 
+  /**
+   * Combo-milestone pool. Fixed length — the slot's `active` flag gates
+   * draw + reuse so the array length is never mutated post-construction.
+   * Keeps the per-frame draw allocation-free.
+   */
+  readonly #milestones: Milestone[];
+
+  /**
+   * Confetti pool. Fixed length — `active=false` slots are free for the next
+   * burst. Spawn helpers walk the pool in order so saturated bursts simply
+   * truncate instead of evicting still-falling pieces.
+   */
+  readonly #confetti: ConfettiParticle[];
+
   /** Index of the last comic word picked, so we can avoid an immediate repeat. */
   #lastComicWordIdx = -1;
   /** Counter used to alternate the comic palette per spawn. */
@@ -265,6 +417,31 @@ export class EffectsRenderer {
         bornMs: 0,
         lifeMs: 0,
         colorRgb: '255,255,255',
+      };
+    }
+    this.#milestones = new Array<Milestone>(MILESTONE_POOL_SIZE);
+    for (let i = 0; i < MILESTONE_POOL_SIZE; i++) {
+      this.#milestones[i] = {
+        active: false,
+        startMs: 0,
+        combo: 0,
+        flavor: 'basic',
+      };
+    }
+    this.#confetti = new Array<ConfettiParticle>(MAX_CONFETTI);
+    for (let i = 0; i < MAX_CONFETTI; i++) {
+      this.#confetti[i] = {
+        active: false,
+        x: 0,
+        y: 0,
+        vx: 0,
+        vy: 0,
+        rotation: 0,
+        rotationVel: 0,
+        color: CONFETTI_COLORS[0] ?? '#ffffff',
+        size: 0,
+        spawnedAtMs: 0,
+        lifetimeMs: 0,
       };
     }
   }
@@ -308,8 +485,110 @@ export class EffectsRenderer {
     this.#comboPopups.push({ combo, bornMs: nowMs });
   }
 
+  /**
+   * Claim a free pool slot for a combo-milestone flourish. Silently no-ops
+   * if every slot is already in use — milestones are rare (combo crossings
+   * are sparse), so saturation is not expected; dropping the spawn is
+   * preferable to evicting a still-animating earlier milestone.
+   */
+  spawnMilestone(combo: number, flavor: MilestoneFlavor, nowMs: number): void {
+    const pool = this.#milestones;
+    for (const slot of pool) {
+      if (slot.active) continue;
+      slot.active = true;
+      slot.startMs = nowMs;
+      slot.combo = combo;
+      slot.flavor = flavor;
+      return;
+    }
+  }
+
   spawnStarPowerActivated(nowMs: number): void {
     this.#starBanners.push({ bornMs: nowMs });
+  }
+
+  /**
+   * Spawn up to `count` confetti particles from a single origin. Each piece
+   * gets a random fan-spread velocity, a random palette colour, and a random
+   * rotational kick. Particles drop under gravity, fade out as they near
+   * their lifetime, and recycle in place — the pool is fixed-length so this
+   * method never grows any array.
+   *
+   * Returns the number of slots actually claimed (clipped against the free
+   * pool capacity). Useful for tests; callers usually ignore it.
+   *
+   * `aimAngle` is the central direction of the spray, in radians. The
+   * convention is the canvas one (0 = +x right, π/2 = +y down), so passing
+   * `-Math.PI / 2` aims straight up; the helpers below use angles that fan
+   * inward from each cannon.
+   */
+  spawnConfetti(
+    originX: number,
+    originY: number,
+    count: number,
+    nowMs: number,
+    aimAngle = -Math.PI / 2,
+  ): number {
+    const pool = this.#confetti;
+    let claimed = 0;
+    for (let i = 0; i < pool.length && claimed < count; i++) {
+      const slot = pool[i];
+      if (slot === undefined || slot.active) continue;
+
+      const spread = (Math.random() - 0.5) * 2 * CONFETTI_FAN_HALF_RAD;
+      const angle = aimAngle + spread;
+      const speed = CONFETTI_SPEED_MIN + Math.random() * (CONFETTI_SPEED_MAX - CONFETTI_SPEED_MIN);
+      const colorIdx = Math.floor(Math.random() * CONFETTI_COLORS.length);
+      const color = CONFETTI_COLORS[colorIdx] ?? CONFETTI_COLORS[0] ?? '#ffffff';
+
+      slot.active = true;
+      slot.x = originX;
+      slot.y = originY;
+      slot.vx = Math.cos(angle) * speed;
+      slot.vy = Math.sin(angle) * speed;
+      slot.rotation = Math.random() * Math.PI * 2;
+      slot.rotationVel =
+        CONFETTI_ROT_VEL_MIN + Math.random() * (CONFETTI_ROT_VEL_MAX - CONFETTI_ROT_VEL_MIN);
+      slot.color = color;
+      slot.size = CONFETTI_SIZE_MIN + Math.random() * (CONFETTI_SIZE_MAX - CONFETTI_SIZE_MIN);
+      slot.spawnedAtMs = nowMs;
+      slot.lifetimeMs = CONFETTI_LIFETIME_MS;
+
+      claimed++;
+    }
+    return claimed;
+  }
+
+  /**
+   * 5★ celebration: two confetti cannons, one anchored just inside each
+   * lower screen corner, fired diagonally inward + upward. Splits
+   * {@link CONFETTI_5_STAR_COUNT} particles roughly evenly between the two
+   * origins.
+   */
+  spawnConfettiFor5Star(stage: { width: number; height: number }, nowMs: number): void {
+    const half = Math.ceil(CONFETTI_5_STAR_COUNT / 2);
+    const yOrigin = stage.height * 0.85;
+    // Aim each cannon up and toward the centre. Canvas y grows downward so
+    // an upward shot is `-π/2`; we then rotate ±0.35 rad toward the middle.
+    const leftAim = -Math.PI / 2 + 0.35;
+    const rightAim = -Math.PI / 2 - 0.35;
+    this.spawnConfetti(stage.width * 0.1, yOrigin, half, nowMs, leftAim);
+    this.spawnConfetti(stage.width * 0.9, yOrigin, CONFETTI_5_STAR_COUNT - half, nowMs, rightAim);
+  }
+
+  /**
+   * 4★ celebration: a small {@link CONFETTI_4_STAR_COUNT}-particle pop from
+   * the centre, aimed straight up. Reads as a "nice job" tap rather than a
+   * full cannons-and-banners moment.
+   */
+  spawnSmallBurstFor4Star(stage: { width: number; height: number }, nowMs: number): void {
+    this.spawnConfetti(
+      stage.width * 0.5,
+      stage.height * 0.55,
+      CONFETTI_4_STAR_COUNT,
+      nowMs,
+      -Math.PI / 2,
+    );
   }
 
   /**
@@ -384,6 +663,8 @@ export class EffectsRenderer {
     this.#drawComicBursts(ctx, nowMs);
     this.#drawComboPopups(ctx, nowMs);
     this.#drawStarPowerBanners(ctx, nowMs);
+    this.#drawMilestones(ctx, nowMs);
+    this.#updateAndDrawConfetti(ctx, dtSec, nowMs);
     ctx.restore();
   }
 
@@ -399,6 +680,12 @@ export class EffectsRenderer {
     this.#comboPopups.length = 0;
     this.#starBanners.length = 0;
     this.#comicBursts.length = 0;
+    for (const m of this.#milestones) {
+      m.active = false;
+    }
+    for (const c of this.#confetti) {
+      c.active = false;
+    }
     this.#lastComicWordIdx = -1;
     this.#comicPaletteIdx = 0;
     this.#lastDrawNowMs = -1;
@@ -816,6 +1103,164 @@ export class EffectsRenderer {
       bursts[writeIdx++] = burst;
     }
     bursts.length = writeIdx;
+  }
+
+  // ---- Combo milestones ---------------------------------------------------
+
+  /**
+   * Draw every active combo-milestone slot. Three flavors stack visuals
+   * over the shared radial wave:
+   *   - basic  → wave only (concentric expanding ring, fades over 800 ms).
+   *   - super  → wave + edge-glow alpha pulse (left + right side bars).
+   *   - legend → wave + edge-glow + gold "COMBO N!" centre text.
+   *
+   * The active palette (read once per slot, not per-pixel) provides the
+   * stroke / fill colour so colourblind players see palette-aware colours.
+   * The fixed-size pool means the iteration never allocates: completed
+   * slots flip `active=false` in place and become reusable on next spawn.
+   */
+  #drawMilestones(ctx: CanvasRenderingContext2D, nowMs: number): void {
+    const pool = this.#milestones;
+    if (pool.length === 0) return;
+
+    // Read the active palette once per draw pass; both lanes' glows and
+    // the gold ring colour come from the same `LanePalette` instance.
+    const palette = getActivePalette();
+
+    for (const m of pool) {
+      if (!m.active) continue;
+      const age = nowMs - m.startMs;
+      const lifeMs = milestoneLifeMs(m.flavor);
+      if (age < 0 || age >= lifeMs) {
+        m.active = false;
+        continue;
+      }
+
+      // 1. Shared radial wave (all flavors).
+      if (age < MILESTONE_WAVE_MS) {
+        const t = age / MILESTONE_WAVE_MS;
+        const r = MILESTONE_WAVE_R0 + (MILESTONE_WAVE_R1 - MILESTONE_WAVE_R0) * t;
+        const alpha = MILESTONE_WAVE_ALPHA0 * (1 - t);
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.lineWidth = MILESTONE_WAVE_LINE_PX;
+        ctx.strokeStyle = palette.L.ringHit;
+        ctx.globalAlpha = alpha;
+        ctx.beginPath();
+        ctx.arc(STAGE_W / 2, STAGE_H / 2, r, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // 2. Edge-glow alpha pulse (super + legend) — 0 → peak → 0 envelope.
+      if ((m.flavor === 'super' || m.flavor === 'legend') && age < MILESTONE_EDGE_MS) {
+        const t = age / MILESTONE_EDGE_MS;
+        const env = Math.sin(Math.PI * t); // 0 → 1 → 0
+        const alpha = MILESTONE_EDGE_PEAK_ALPHA * env;
+        if (alpha > 0) {
+          ctx.save();
+          ctx.fillStyle = palette.R.glow;
+          ctx.globalAlpha = alpha;
+          ctx.fillRect(0, 0, MILESTONE_EDGE_WIDTH_PX, STAGE_H);
+          ctx.fillRect(STAGE_W - MILESTONE_EDGE_WIDTH_PX, 0, MILESTONE_EDGE_WIDTH_PX, STAGE_H);
+          ctx.restore();
+        }
+      }
+
+      // 3. Gold "COMBO N!" centre text (legend only).
+      if (m.flavor === 'legend' && age < MILESTONE_TEXT_MS) {
+        let scale: number;
+        let alpha: number;
+        if (age < MILESTONE_TEXT_POPIN_MS) {
+          const t = age / MILESTONE_TEXT_POPIN_MS;
+          const eased = 1 - (1 - t) * (1 - t);
+          scale = 0.7 + 0.3 * eased;
+          alpha = t;
+        } else if (age < MILESTONE_TEXT_POPIN_MS + MILESTONE_TEXT_HOLD_MS) {
+          scale = 1;
+          alpha = 1;
+        } else {
+          const t =
+            (age - MILESTONE_TEXT_POPIN_MS - MILESTONE_TEXT_HOLD_MS) / MILESTONE_TEXT_FADE_MS;
+          scale = 1 + 0.06 * t;
+          alpha = 1 - t;
+        }
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(STAGE_W / 2, MILESTONE_TEXT_Y);
+        ctx.scale(scale, scale);
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.font = `900 italic ${MILESTONE_TEXT_PX}px "Arial Black", Impact, sans-serif`;
+        ctx.shadowColor = 'rgba(0,0,0,0.7)';
+        ctx.shadowBlur = 18;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 4;
+        // ringHit is the palette's gold accent — same `#ffd56a` in both the
+        // default and colourblind palettes today, but pulling from the
+        // palette keeps any future re-skin honest.
+        ctx.fillStyle = palette.L.ringHit;
+        ctx.fillText(`COMBO ${m.combo}!`, 0, 0);
+        ctx.restore();
+      }
+    }
+  }
+
+  // ---- Confetti -----------------------------------------------------------
+
+  /**
+   * Update + draw the confetti pool. Each particle:
+   *   - integrates `vy += g * dt` then `x/y += v * dt`
+   *   - advances `rotation` by `rotationVel * dt`
+   *   - fades alpha linearly as `t/lifetime` approaches 1
+   *
+   * Draw is a single `save / translate / rotate / fillRect / restore` per
+   * live slot — no string assembly per particle (the colour was pre-stringified
+   * at spawn, and `fillStyle` is set once per slot, not from a template). The
+   * pool is fixed-length so this whole pass allocates nothing.
+   */
+  #updateAndDrawConfetti(ctx: CanvasRenderingContext2D, dtSec: number, nowMs: number): void {
+    const pool = this.#confetti;
+    if (pool.length === 0) return;
+
+    const gravityDelta = CONFETTI_GRAVITY_PX_S2 * dtSec;
+    const parentAlpha = ctx.globalAlpha;
+
+    for (const p of pool) {
+      if (!p.active) continue;
+
+      const age = nowMs - p.spawnedAtMs;
+      if (age < 0 || age >= p.lifetimeMs || p.lifetimeMs <= 0) {
+        p.active = false;
+        continue;
+      }
+
+      // Physics integration. Skip the position update entirely on the very
+      // first frame after spawn (dtSec=0) so the particle still draws at its
+      // origin instead of getting one free-fall step from a stale dt.
+      if (dtSec > 0) {
+        p.vy += gravityDelta;
+        p.x += p.vx * dtSec;
+        p.y += p.vy * dtSec;
+        p.rotation += p.rotationVel * dtSec;
+      }
+
+      const lifeT = age / p.lifetimeMs;
+      // Hold full alpha for the first ~70% of the life, then linear-fade
+      // so the burst stays visible while it falls then quietly disappears.
+      const alpha = lifeT < 0.7 ? 1 : Math.max(0, 1 - (lifeT - 0.7) / 0.3);
+      if (alpha <= 0) continue;
+
+      ctx.save();
+      ctx.globalAlpha = parentAlpha * alpha;
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rotation);
+      ctx.fillStyle = p.color;
+      // Centre the rectangle on the origin so rotation pivots the centre.
+      const half = p.size * 0.5;
+      ctx.fillRect(-half, -half * 0.5, p.size, p.size * 0.5);
+      ctx.restore();
+    }
   }
 }
 

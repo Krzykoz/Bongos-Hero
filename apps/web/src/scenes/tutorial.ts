@@ -45,7 +45,7 @@ import { laneForCode } from '../input/sides.js';
 import { BackgroundRenderer } from '../render/background.js';
 import { HighwayRenderer } from '../render/highway.js';
 import { NotesRenderer } from '../render/notes.js';
-import { EffectsRenderer } from '../render/effects.js';
+import { EffectsRenderer, type MilestoneFlavor } from '../render/effects.js';
 import { HudRenderer } from '../render/hud.js';
 import { BongosRenderer } from '../render/bongos.js';
 import { saveSettings } from '../settings/index.js';
@@ -58,6 +58,19 @@ const STAGE_H = 720;
 
 /** Tutorial wraps up at exactly this t (ms) regardless of player progress. */
 const TUTORIAL_DURATION_MS = 33_000;
+
+/**
+ * Combo milestone thresholds — kept in sync with the play scene so a player
+ * who lucks into a 25/50 streak in the tutorial sees the same flourish
+ * they will in real songs.
+ */
+const COMBO_MILESTONES: readonly number[] = [25, 50, 100, 150, 200, 300, 500, 750, 1000];
+
+function milestoneFlavor(combo: number): MilestoneFlavor {
+  if (combo < 50) return 'basic';
+  if (combo < 100) return 'super';
+  return 'legend';
+}
 
 interface Step {
   /** Scene-clock ms when this overlay text should become visible. */
@@ -132,6 +145,12 @@ interface State {
   exited: boolean;
   /** Index into `STEPS` of the banner currently mounted; -1 before mount. */
   shownStepIdx: number;
+  /**
+   * Highest combo-milestone value triggered for the current unbroken
+   * streak. Resets on combo break so a player can re-trigger the same
+   * flourish on a fresh streak. Mirrors play.ts.
+   */
+  lastComboMilestone: number;
 }
 
 let state: State | null = null;
@@ -242,6 +261,7 @@ export const tutorialScene: Scene = {
       startedAtPerfMs: performance.now(),
       exited: false,
       shownStepIdx: -1,
+      lastComboMilestone: 0,
     };
     s.input = new KeyboardInput({ getSongTimeMs: () => getMasterClockMs(s) });
     state = s;
@@ -403,14 +423,30 @@ export const tutorialScene: Scene = {
     const sp = snapshot.spActive;
     const beatPhase = s.background.beatPhase(t);
 
+    // Combo milestone watch (mirrors play.ts). Resets on combo break.
+    const combo = snapshot.combo;
+    if (combo === 0) {
+      s.lastComboMilestone = 0;
+    } else {
+      const milestone = COMBO_MILESTONES.find((m) => combo >= m && s.lastComboMilestone < m);
+      if (milestone !== undefined) {
+        s.effects.spawnMilestone(milestone, milestoneFlavor(milestone), t);
+        s.lastComboMilestone = milestone;
+      }
+    }
+
     ctx.clearRect(0, 0, STAGE_W, STAGE_H);
 
     s.background.draw(ctx, { nowMs: t, beatPhase, starPowerActive: sp });
 
+    // The tutorial scene has no AudioEngine (clock comes from
+    // performance.now()), so the audio-reactive edge glow has no source —
+    // pass a hard 0 to keep the renderer's edge-glow path skipped.
     s.highway.draw(ctx, {
       pressed: { L: s.input.isLanePressed('L'), R: s.input.isLanePressed('R') },
       starPowerActive: sp,
       beatPulse: 1 - beatPhase,
+      lowBandEnergy: 0,
     });
 
     let heldL = false;

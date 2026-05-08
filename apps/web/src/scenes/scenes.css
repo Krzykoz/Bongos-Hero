@@ -605,6 +605,14 @@
   margin-top: 6px;
 }
 
+/* Failed-run muted-screen tint. Applied to the results overlay root by the
+   tiered-celebration branch in results.ts when the player fails out. The
+   slight saturation drop reads as a sympathetic "low energy" version of
+   the normal results screen — not a punishing overlay. */
+.bh-results.bh-results-muted {
+  filter: saturate(0.7);
+}
+
 /* ---- Focus rings (keyboard nav, matches the magenta highway theme) ---- */
 
 .bh-btn:focus-visible,

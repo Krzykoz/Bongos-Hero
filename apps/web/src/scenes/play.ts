@@ -49,12 +49,19 @@ import { ApiError, getSong, getSongChart, songAudioUrl } from '../api.js';
 import type { Scene, SceneContext } from '../router.js';
 import { el } from './dom.js';
 import { BackgroundRenderer } from '../render/background.js';
-import { EffectsRenderer } from '../render/effects.js';
+import { EffectsRenderer, type MilestoneFlavor } from '../render/effects.js';
 import { HudRenderer } from '../render/hud.js';
 import { extractYouTubeId, YouTubeBackground } from '../youtube/embed.js';
 
 const COUNT_IN_MS = 3000;
 const COMBO_POPUP_THRESHOLD = 50;
+/**
+ * Combo milestone thresholds, ascending. The per-frame tick triggers a
+ * single milestone flourish on the first frame the combo crosses each
+ * value, with `flavor` chosen by magnitude (basic <50, super <100, legend
+ * 100+). The watch resets when the combo breaks back to 0.
+ */
+const COMBO_MILESTONES: readonly number[] = [25, 50, 100, 150, 200, 300, 500, 750, 1000];
 const SLO_MO_COMBO_THRESHOLD = 20;
 const SLO_MO_RATE = 0.85;
 const SLO_MO_RAMP_DOWN_MS = 30;
@@ -110,6 +117,12 @@ interface PlayState {
   /** Monotonic combo at the last frame, used to detect milestone crossings. */
   lastCombo: number;
   /**
+   * Highest combo-milestone value already triggered for the current
+   * unbroken streak. Reset to 0 whenever the combo drops back to 0 so
+   * the same milestones fire again on a fresh streak.
+   */
+  lastComboMilestone: number;
+  /**
    * Pending setTimeout that ramps playback back to 1.0x at the end of a
    * slo-mo-on-miss window. Cleared on scene exit, pause, and fail so the
    * effect can never get stuck mid-ramp.
@@ -161,6 +174,7 @@ function makeInitialState(songId: string, difficulty: Difficulty): PlayState {
     unsubscribers: [],
     countInStartedAtPerf: 0,
     lastCombo: 0,
+    lastComboMilestone: 0,
     sloMoTimeout: null,
     ended: false,
   };
@@ -221,6 +235,17 @@ function getMasterClockMs(s: PlayState): number {
   }
   if (s.audio) return s.audio.currentTimeMs();
   return 0;
+}
+
+/**
+ * Map a combo-milestone threshold to its visual flavor. 25 → basic (wave
+ * only), 50 → super (wave + edge pulse), 100+ → legend (wave + edge +
+ * gold COMBO N! text). Kept inline-ish so the call site reads cleanly.
+ */
+function milestoneFlavor(combo: number): MilestoneFlavor {
+  if (combo < 50) return 'basic';
+  if (combo < 100) return 'super';
+  return 'legend';
 }
 
 function handleScoringEvent(s: PlayState, ev: ScoringEvent): void {
@@ -783,6 +808,24 @@ export const playScene: Scene = {
     const sp = snapshot?.spActive === true;
     const beatPhase = s.background.beatPhase(nowMs);
 
+    // Watch combo for milestone crossings (25 / 50 / 100 / …). Resets back
+    // to 0 when the streak breaks so the same flourish fires on a fresh
+    // streak. The combo can only step up by 1 per scoring event, so picking
+    // the first un-fired threshold per frame is sufficient — slower
+    // climbers will simply trigger across consecutive frames.
+    if (snapshot) {
+      const combo = snapshot.combo;
+      if (combo === 0) {
+        s.lastComboMilestone = 0;
+      } else {
+        const milestone = COMBO_MILESTONES.find((m) => combo >= m && s.lastComboMilestone < m);
+        if (milestone !== undefined) {
+          s.effects.spawnMilestone(milestone, milestoneFlavor(milestone), nowMs);
+          s.lastComboMilestone = milestone;
+        }
+      }
+    }
+
     // Periodic YouTube drift correction (1 Hz, only while audio is playing
     // and the iframe is showing).
     if (
@@ -816,7 +859,12 @@ export const playScene: Scene = {
     }
 
     // 3. Highway. When YT is showing, the highway skips its full-stage bg
-    //    fill so the iframe shows through outside the trapezoid.
+    //    fill so the iframe shows through outside the trapezoid. The
+    //    `lowBandEnergy` value drives the audio-reactive edge glow inside
+    //    the highway renderer; AudioEngine.getLowBandEnergy() already
+    //    short-circuits to 0 when the user has disabled the audio-reactive
+    //    setting (see `_audioReactiveEnabled` mirror in engine.ts), so we
+    //    don't gate it again here.
     s.highway.draw(ctx, {
       pressed: {
         L: s.input?.isLanePressed('L') ?? false,
@@ -825,6 +873,7 @@ export const playScene: Scene = {
       starPowerActive: sp,
       beatPulse: 1 - beatPhase,
       transparentBackground: ytShowing,
+      lowBandEnergy: s.audio?.getLowBandEnergy() ?? 0,
     });
 
     // 4. Notes. Sustain trails respond to current hold state — pull it

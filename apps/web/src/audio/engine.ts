@@ -10,11 +10,12 @@
  * Routing: the active `AudioBufferSourceNode` connects to a single internal
  * `_master` GainNode (lazy-built with the AudioContext) which connects to
  * `ctx.destination`. `setMasterVolume(v)` writes a clamped value to that
- * node, and the engine self-subscribes to the user settings store at
- * construction so volume changes propagate live.
+ * node, and the engine self-registers per-key appliers against the user
+ * settings store at construction so volume + audio-reactive changes
+ * propagate live without callers having to wire anything up.
  */
 
-import { subscribe as subscribeSettings } from '../settings/index.js';
+import { register as registerSetting } from '../settings/index.js';
 
 export interface AudioEngineOptions {
   /** Constant offset (ms) added to the reported song time. Positive = visuals appear earlier. */
@@ -47,6 +48,28 @@ export class AudioEngine {
   private _masterVolume = 1;
   private _buffer: AudioBuffer | null = null;
   private _source: AudioBufferSourceNode | null = null;
+
+  /**
+   * Single AnalyserNode tapped off the master bus for the audio-reactive
+   * highway-edge glow. Built lazily inside `_ensureCtx` so the engine has
+   * no Web-Audio side effects until something else also needs the context.
+   * The analyser is a dead-end branch (master.connect(analyser); analyser
+   * is not connected to destination) so it does not affect output volume.
+   */
+  private _analyser: AnalyserNode | null = null;
+  /**
+   * Reusable byte-frequency buffer sized to `analyser.frequencyBinCount`
+   * (= fftSize / 2 = 128 for fftSize=256). Allocated once when the
+   * analyser is built; `getLowBandEnergy` writes into it in place every
+   * frame so the per-frame call path performs zero allocations.
+   */
+  private _fftBuf: Uint8Array<ArrayBuffer> | null = null;
+  /**
+   * Mirror of `Settings.audioReactiveEnabled`. When false, `getLowBandEnergy`
+   * skips the analyser sample entirely and returns 0, which lets the
+   * renderer also short-circuit the edge-glow draw.
+   */
+  private _audioReactiveEnabled = true;
 
   /** ctx.currentTime (seconds) at which the current source.start() was called. */
   private _startedAtCtxTime = 0;
@@ -88,12 +111,16 @@ export class AudioEngine {
 
   constructor(opts: AudioEngineOptions = {}) {
     this._audioOffsetMs = opts.audioOffsetMs ?? 0;
-    // Self-subscribe to settings so music volume changes propagate live
-    // without callers having to wire anything up. `subscribe` invokes
-    // synchronously with the current settings, so this also seeds
-    // `_masterVolume` for the next time the AudioContext is built.
-    subscribeSettings((s) => {
-      this.setMasterVolume(s.musicVolume);
+    // Per-key registrations against the settings store. `register()` invokes
+    // each applier synchronously with the current value, so this also seeds
+    // `_masterVolume` and `_audioReactiveEnabled` for the next time the
+    // AudioContext is built. Volume slider tweaks no longer redundantly
+    // re-fire the audio-reactive branch (and vice versa).
+    registerSetting('musicVolume', (v) => {
+      this.setMasterVolume(v);
+    });
+    registerSetting('audioReactiveEnabled', (v) => {
+      this._audioReactiveEnabled = v;
     });
   }
 
@@ -377,6 +404,39 @@ export class AudioEngine {
     }
   }
 
+  /**
+   * Current low-frequency energy on the master bus, normalised to `[0, 1]`.
+   *
+   * Reads the byte-frequency spectrum of the AnalyserNode tap and averages
+   * the lowest two bins to estimate the kick/bass band:
+   *
+   *   bin width Hz = sampleRate / fftSize         (e.g. 48000 / 256 ≈ 187 Hz)
+   *   bins 0..1     ≈ 0..375 Hz at 48 kHz         (kick + low-bass range)
+   *
+   * Returns 0 when no source is currently playing, when the AudioContext
+   * (and hence the analyser) hasn't been built yet, or when the player has
+   * disabled the audio-reactive accent in Settings — in those cases the
+   * renderer skips the edge-glow draw entirely.
+   *
+   * Hot path: this runs once per frame from the renderer. The byte buffer
+   * is reused (`this._fftBuf`) so there is no per-frame allocation.
+   */
+  getLowBandEnergy(): number {
+    if (!this._audioReactiveEnabled) return 0;
+    if (this._state !== 'playing') return 0;
+    const analyser = this._analyser;
+    const buf = this._fftBuf;
+    if (!analyser || !buf) return 0;
+    analyser.getByteFrequencyData(buf);
+    const lowBins = Math.min(2, buf.length);
+    if (lowBins === 0) return 0;
+    let sum = 0;
+    for (let i = 0; i < lowBins; i++) {
+      sum += buf[i] ?? 0;
+    }
+    return sum / (lowBins * 255);
+  }
+
   // ---- internals ----
 
   private _ensureCtx(): AudioContext {
@@ -387,6 +447,23 @@ export class AudioEngine {
       master.gain.value = this._masterVolume;
       master.connect(this._ctx.destination);
       this._master = master;
+
+      // FFT analyser tap on the master bus, in parallel with the destination
+      // so it never alters the audible signal. fftSize=256 gives a 128-bin
+      // spectrum — enough resolution to isolate the kick/bass band
+      // (~60–250 Hz) at near-zero CPU cost. smoothingTimeConstant = 0.6
+      // keeps the per-frame energy from flickering on individual hits.
+      const analyser = this._ctx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.6;
+      master.connect(analyser);
+      this._analyser = analyser;
+      // Allocate the byte-frequency buffer once. `getLowBandEnergy` reuses
+      // it on every call — no per-frame allocation in the render hot path.
+      // Construct from a freshly-typed ArrayBuffer so the TypedArray's
+      // backing-store type narrows to `ArrayBuffer` (matches the signature
+      // of `AnalyserNode.getByteFrequencyData`).
+      this._fftBuf = new Uint8Array(new ArrayBuffer(analyser.frequencyBinCount));
     }
     return this._ctx;
   }

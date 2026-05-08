@@ -39,6 +39,13 @@ export interface HighwayRenderState {
    * trapezoid is still filled (semi-opaque) so the highway stays readable.
    */
   transparentBackground?: boolean;
+  /**
+   * Current low-frequency (kick/bass) energy in `[0, 1]`, sourced from
+   * `AudioEngine.getLowBandEnergy()`. When omitted (or 0 — engine idle /
+   * audio-reactive setting off), the renderer skips the edge-glow draw
+   * entirely so the highway looks identical to the pre-FFT build.
+   */
+  lowBandEnergy?: number;
 }
 
 /** Internal cache of canvas gradients keyed off the owning context. */
@@ -60,6 +67,20 @@ const LANE_GLOW_RADIUS = 220;
 
 /** Base height (in px) of the soft hit-line glow strip. */
 const HIT_LINE_GLOW_HEIGHT = 16;
+
+/**
+ * Inward thickness (px) of the audio-reactive edge glow strips, measured
+ * perpendicular-ish to each slanted highway edge. Kept thin so the glow
+ * reads as a rim accent rather than overpowering the trapezoid interior.
+ */
+const EDGE_GLOW_THICKNESS = 8;
+
+/**
+ * Solid fill colour for the audio-reactive edge glow. The pulse is driven
+ * by `globalAlpha` (no string concatenation per frame), so this is a plain
+ * full-opacity neon violet that complements the existing hit-line glow.
+ */
+const EDGE_GLOW_COLOR = 'rgb(196, 121, 255)';
 
 export class HighwayRenderer {
   #cache: GradientCache | null = null;
@@ -121,6 +142,15 @@ export class HighwayRenderer {
       ctx.moveTo(HIGHWAY_CENTER_X - hw, y);
       ctx.lineTo(HIGHWAY_CENTER_X + hw, y);
       ctx.stroke();
+    }
+
+    // 5b. Audio-reactive edge glow. Skipped entirely when the engine reports
+    //     0 (idle, paused, or audioReactiveEnabled=false in Settings) so the
+    //     non-playing highway and the no-FFT codepath both stay pixel-identical
+    //     to the pre-feature build.
+    const lowBandEnergy = state.lowBandEnergy ?? 0;
+    if (lowBandEnergy > 0) {
+      this.#drawEdgeGlow(ctx, lowBandEnergy);
     }
 
     // 6. Lane "press" glows. Clip to the trapezoid so the glow doesn't bleed
@@ -196,6 +226,49 @@ export class HighwayRenderer {
     ctx.translate(cx, cy);
     ctx.fillStyle = grad;
     ctx.fillRect(-LANE_GLOW_RADIUS, -LANE_GLOW_RADIUS, LANE_GLOW_RADIUS * 2, LANE_GLOW_RADIUS * 2);
+    ctx.restore();
+  }
+
+  /**
+   * Audio-reactive edge accent: paints a thin neon strip just inside each
+   * slanted highway edge. Alpha = `0.3 + 0.7 * energy` so the glow always
+   * has a faint baseline once audio is playing and lights up on every kick.
+   *
+   * Hot-path discipline:
+   *   - dynamic alpha rides on `globalAlpha` (no per-frame `rgba(...)`
+   *     string concatenation),
+   *   - polygon coordinates are computed from module-level constants,
+   *   - no array/object allocation, no closures.
+   */
+  #drawEdgeGlow(ctx: CanvasRenderingContext2D, energy: number): void {
+    const alpha = Math.min(1, 0.3 + 0.7 * energy);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = EDGE_GLOW_COLOR;
+
+    // Left edge: trace outer-far → outer-near → inner-near → inner-far so
+    // the resulting quad hugs the slanted edge on its inward side.
+    const leftFarOuter = HIGHWAY_CENTER_X - HIGHWAY_FAR_HALF_W;
+    const leftNearOuter = HIGHWAY_CENTER_X - HIGHWAY_NEAR_HALF_W;
+    ctx.beginPath();
+    ctx.moveTo(leftFarOuter, HIGHWAY_FAR_Y);
+    ctx.lineTo(leftNearOuter, HIGHWAY_NEAR_Y);
+    ctx.lineTo(leftNearOuter + EDGE_GLOW_THICKNESS, HIGHWAY_NEAR_Y);
+    ctx.lineTo(leftFarOuter + EDGE_GLOW_THICKNESS, HIGHWAY_FAR_Y);
+    ctx.closePath();
+    ctx.fill();
+
+    // Right edge: mirror of the left, thickness applied inward (negative).
+    const rightFarOuter = HIGHWAY_CENTER_X + HIGHWAY_FAR_HALF_W;
+    const rightNearOuter = HIGHWAY_CENTER_X + HIGHWAY_NEAR_HALF_W;
+    ctx.beginPath();
+    ctx.moveTo(rightFarOuter, HIGHWAY_FAR_Y);
+    ctx.lineTo(rightNearOuter, HIGHWAY_NEAR_Y);
+    ctx.lineTo(rightNearOuter - EDGE_GLOW_THICKNESS, HIGHWAY_NEAR_Y);
+    ctx.lineTo(rightFarOuter - EDGE_GLOW_THICKNESS, HIGHWAY_FAR_Y);
+    ctx.closePath();
+    ctx.fill();
+
     ctx.restore();
   }
 

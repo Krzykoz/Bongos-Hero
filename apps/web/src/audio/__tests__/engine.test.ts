@@ -347,3 +347,124 @@ describe('AudioEngine practice loop range', () => {
     expect(ctx.createBufferSource).toHaveBeenCalledTimes(1);
   });
 });
+
+// ---- Analyser / FFT low-band energy -----------------------------------------
+
+interface FakeAnalyser {
+  fftSize: number;
+  smoothingTimeConstant: number;
+  frequencyBinCount: number;
+  getByteFrequencyData: ReturnType<typeof vi.fn>;
+  connect: ReturnType<typeof vi.fn>;
+  disconnect: ReturnType<typeof vi.fn>;
+}
+
+interface AnalyserEnginePrivates {
+  _state: 'idle' | 'loading' | 'ready' | 'playing' | 'paused' | 'ended';
+  _analyser: FakeAnalyser | null;
+  _fftBuf: Uint8Array | null;
+  _audioReactiveEnabled: boolean;
+}
+
+function makeFakeAnalyser(fillBytes: readonly number[] = []): FakeAnalyser {
+  const fftSize = 256;
+  const frequencyBinCount = fftSize / 2;
+  return {
+    fftSize,
+    smoothingTimeConstant: 0.6,
+    frequencyBinCount,
+    // Mirror the real `AnalyserNode.getByteFrequencyData` contract: write
+    // the current spectrum into the caller-provided Uint8Array in place.
+    getByteFrequencyData: vi.fn((out: Uint8Array): void => {
+      const n = Math.min(out.length, fillBytes.length);
+      for (let i = 0; i < n; i++) {
+        out[i] = fillBytes[i] ?? 0;
+      }
+      for (let i = n; i < out.length; i++) {
+        out[i] = 0;
+      }
+    }),
+    connect: vi.fn(),
+    disconnect: vi.fn(),
+  };
+}
+
+function attachAnalyser(
+  eng: AudioEngine,
+  analyser: FakeAnalyser,
+  state: AnalyserEnginePrivates['_state'] = 'playing',
+): { privates: AnalyserEnginePrivates; buf: Uint8Array } {
+  const privates = eng as unknown as AnalyserEnginePrivates;
+  const buf = new Uint8Array(analyser.frequencyBinCount);
+  privates._analyser = analyser;
+  privates._fftBuf = buf;
+  privates._state = state;
+  return { privates, buf };
+}
+
+describe('AudioEngine analyser', () => {
+  it('getLowBandEnergy() returns 0 when no source is playing', () => {
+    const eng = new AudioEngine();
+    // Fresh engine: state is 'idle', no analyser built — no FFT sample
+    // should run, no allocation, and the renderer-facing value is 0.
+    expect(eng.getLowBandEnergy()).toBe(0);
+
+    // Even with an analyser attached, a non-'playing' state must short
+    // out before sampling — the highway pulse should freeze when the
+    // player pauses or seeks.
+    const analyser = makeFakeAnalyser([255, 255, 0, 0]);
+    attachAnalyser(eng, analyser, 'paused');
+    expect(eng.getLowBandEnergy()).toBe(0);
+    expect(analyser.getByteFrequencyData).not.toHaveBeenCalled();
+  });
+
+  it('getLowBandEnergy() returns ~1.0 for a full low-band spectrum', () => {
+    // Bins 0..1 saturated, all higher bins silent. The function averages
+    // (255 + 255) / (2 * 255) = 1.0 — peak kick/bass energy.
+    const eng = new AudioEngine();
+    const analyser = makeFakeAnalyser([255, 255, 0, 0]);
+    attachAnalyser(eng, analyser, 'playing');
+    const energy = eng.getLowBandEnergy();
+    expect(energy).toBeCloseTo(1.0, 5);
+    expect(analyser.getByteFrequencyData).toHaveBeenCalledTimes(1);
+  });
+
+  it('getLowBandEnergy() returns ~0 for a silent spectrum', () => {
+    const eng = new AudioEngine();
+    const analyser = makeFakeAnalyser([0, 0, 0, 0]);
+    attachAnalyser(eng, analyser, 'playing');
+    expect(eng.getLowBandEnergy()).toBe(0);
+  });
+
+  it('reuses the same Uint8Array buffer on every call (no per-frame allocation)', () => {
+    // The renderer hits this once per frame, so the engine must hand the
+    // analyser the SAME buffer reference every time. We capture the arg on
+    // each call and compare references — anything else would imply a
+    // hidden allocation in the hot path.
+    const eng = new AudioEngine();
+    const analyser = makeFakeAnalyser([128, 64, 0, 0]);
+    const { buf } = attachAnalyser(eng, analyser, 'playing');
+
+    eng.getLowBandEnergy();
+    eng.getLowBandEnergy();
+    eng.getLowBandEnergy();
+
+    expect(analyser.getByteFrequencyData).toHaveBeenCalledTimes(3);
+    const calls = analyser.getByteFrequencyData.mock.calls;
+    expect(calls[0]?.[0]).toBe(buf);
+    expect(calls[1]?.[0]).toBe(buf);
+    expect(calls[2]?.[0]).toBe(buf);
+  });
+
+  it('returns 0 when audioReactiveEnabled is false (skips the analyser sample)', () => {
+    // Settings off -> renderer should also skip its draw, but the engine
+    // must short-circuit *before* touching the analyser to keep CPU at
+    // exactly zero on mobile / low-end devices.
+    const eng = new AudioEngine();
+    const analyser = makeFakeAnalyser([255, 255, 0, 0]);
+    const { privates } = attachAnalyser(eng, analyser, 'playing');
+    privates._audioReactiveEnabled = false;
+    expect(eng.getLowBandEnergy()).toBe(0);
+    expect(analyser.getByteFrequencyData).not.toHaveBeenCalled();
+  });
+});
