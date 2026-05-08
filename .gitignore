@@ -14,4 +14,9 @@ build/
 # Generated song data
 data/songs/*/
 !data/songs/.gitkeep
+
+# Starter song pack — committed to repo (CC-BY 4.0, see data/songs/ATTRIBUTION.md)
+!data/songs/28f7e791-d35c-5d05-99b6-9763ffe2665f/
+!data/songs/3f69750d-4339-50fe-900c-64160c2314e0/
+!data/songs/6e5afd28-923b-540f-9621-a3fb92d0d22c/
 screenshots/
